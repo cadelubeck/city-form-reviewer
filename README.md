@@ -1,0 +1,54 @@
+# City Form Reviewer
+
+A low-cost SaaS foundation for reviewing and saving city form intake work.
+
+## Cheapest production setup
+
+- Host the app on Vercel Hobby while validating the idea.
+- Use Supabase Free for sign-in and the Postgres database.
+- Keep Stripe out until you are ready to charge customers.
+- Buy a custom domain only when you want the site to look official.
+
+## Local setup
+
+1. Install dependencies:
+
+   ```bash
+   npm install
+   ```
+
+2. Create a free Supabase project.
+
+3. In Supabase, open the SQL editor and run:
+
+   ```sql
+   -- Paste the contents of supabase/schema.sql here.
+   ```
+
+4. Copy `.env.example` to `.env.local` and add:
+
+   ```bash
+   NEXT_PUBLIC_SUPABASE_URL=your-project-url
+   NEXT_PUBLIC_SUPABASE_ANON_KEY=your-anon-key
+   ```
+
+5. Start the app:
+
+   ```bash
+   npm run dev
+   ```
+
+## Deploy on Vercel
+
+1. Import `cadelubeck/city-form-reviewer` into Vercel.
+2. Add the same two Supabase environment variables in Vercel.
+3. Deploy.
+4. In Supabase Authentication settings, add your Vercel URL to the allowed redirect URLs.
+
+## Security notes
+
+- Database row-level security is enabled in `supabase/schema.sql`.
+- Users can only read, create, update, and delete their own reviews.
+- Supabase service-role keys must never be added to the browser or committed to Git.
+- Security headers are configured in `next.config.ts`.
+- Keep `.env.local` private. It is ignored by Git.
