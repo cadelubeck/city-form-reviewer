@@ -46,7 +46,6 @@ textarea {
 .topbar,
 .panel-heading,
 .review-meta,
-.security-badge,
 .inline-fields {
   display: flex;
   align-items: center;
@@ -88,16 +87,6 @@ h2 {
 h3 {
   margin-bottom: 6px;
   font-size: 1rem;
-}
-
-.security-badge {
-  gap: 8px;
-  min-height: 40px;
-  padding: 0 14px;
-  border: 1px solid rgba(47, 125, 92, 0.28);
-  background: rgba(255, 255, 255, 0.82);
-  color: var(--green);
-  font-weight: 800;
 }
 
 .metrics {

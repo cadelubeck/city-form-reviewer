@@ -10,7 +10,6 @@ import {
   LogOut,
   Plus,
   Save,
-  ShieldCheck,
   Sparkles
 } from "lucide-react";
 import type { User } from "@supabase/supabase-js";
@@ -151,10 +150,6 @@ export function AppShell() {
           <div>
             <p className="eyebrow">Secure review workspace</p>
             <h1>City Form Reviewer</h1>
-          </div>
-          <div className="security-badge">
-            <ShieldCheck size={18} />
-            <span>{readyForDatabase ? "Database ready" : "Add Supabase keys"}</span>
           </div>
         </header>
 
