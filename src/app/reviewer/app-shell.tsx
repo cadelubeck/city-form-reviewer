@@ -6,15 +6,17 @@ import {
   CheckCircle2,
   CircleDot,
   FileCheck2,
+  Globe2,
   Lock,
   LogOut,
   Plus,
   Save,
+  SearchCheck,
   Sparkles
 } from "lucide-react";
 import type { User } from "@supabase/supabase-js";
 import { getSupabase } from "@/lib/supabase";
-import type { Review, ReviewStatus, RiskLevel } from "@/lib/types";
+import type { Review, ReviewResult, ReviewStatus, RiskLevel, SiteFinding } from "@/lib/types";
 
 const statusLabels: Record<ReviewStatus, string> = {
   draft: "Draft",
@@ -31,13 +33,43 @@ const statusIcons: Record<ReviewStatus, React.ReactNode> = {
 };
 
 const emptyForm = {
-  city: "",
-  permit_type: "",
+  city: "Brigham City",
+  clientId: "brigham-city",
+  permit_type: "Site development review",
   applicant: "",
+  projectName: "",
+  address: "",
+  proposalText: "",
+  geotechText: "",
+  aggregateBaseDepth: "",
+  frostDepth: "",
+  groundwaterClearance: "",
+  seismicDesignCategory: false,
+  geotechAggregateBaseDepth: "",
+  geotechFrostDepth: "",
+  geotechGroundwaterClearance: "",
+  scopeTags: ["site-development", "roadway", "commercial"],
+  uploadedFiles: [] as string[],
   notes: "",
   risk_level: "medium" as RiskLevel,
   status: "draft" as ReviewStatus
 };
+
+type ReviewApiResponse = {
+  ok: boolean;
+  message?: string;
+  review?: ReviewResult;
+  aiNarrative?: string | null;
+};
+
+const scopeOptions = [
+  { id: "site-development", label: "Site" },
+  { id: "roadway", label: "Road" },
+  { id: "utility", label: "Utility" },
+  { id: "stormwater", label: "Stormwater" },
+  { id: "structure", label: "Structure" },
+  { id: "commercial", label: "Commercial" }
+];
 
 export function AppShell() {
   const supabase = useMemo(() => getSupabase(), []);
@@ -46,8 +78,11 @@ export function AppShell() {
   const [password, setPassword] = useState("");
   const [reviews, setReviews] = useState<Review[]>([]);
   const [form, setForm] = useState(emptyForm);
+  const [reviewResult, setReviewResult] = useState<ReviewResult | null>(null);
+  const [aiNarrative, setAiNarrative] = useState<string | null>(null);
   const [message, setMessage] = useState("");
   const [isBusy, setIsBusy] = useState(false);
+  const [isReviewing, setIsReviewing] = useState(false);
 
   useEffect(() => {
     if (!supabase) return;
@@ -105,7 +140,162 @@ export function AppShell() {
     if (!supabase) return;
     await supabase.auth.signOut();
     setForm(emptyForm);
+    setReviewResult(null);
+    setAiNarrative(null);
     setMessage("Signed out.");
+  }
+
+  function updateScope(tag: string) {
+    setForm((current) => {
+      const scopeTags = current.scopeTags.includes(tag)
+        ? current.scopeTags.filter((item) => item !== tag)
+        : [...current.scopeTags, tag];
+      return { ...current, scopeTags };
+    });
+  }
+
+  function updateFiles(files: FileList | null) {
+    setForm((current) => ({
+      ...current,
+      uploadedFiles: Array.from(files ?? []).map((file) => file.name)
+    }));
+  }
+
+  function numberOrNull(value: string) {
+    if (!value.trim()) return null;
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+
+  function buildSiteFindings() {
+    const siteFindings: SiteFinding[] = [];
+
+    const geotechAggregate = numberOrNull(form.geotechAggregateBaseDepth);
+    if (geotechAggregate !== null) {
+      siteFindings.push({
+        id: "uploaded-geo-road-base-depth",
+        topic: "Roadway section",
+        metric: "aggregate_base_depth",
+        comparator: "minimum",
+        value: geotechAggregate,
+        unit: "in",
+        sourceType: "geotechnical-report",
+        sourceTitle: "Uploaded geotechnical report",
+        citation: "Geotechnical/site report aggregate base recommendation",
+        rationale: "Site-specific soils can require a deeper road base than the city standard."
+      });
+    }
+
+    const geotechFrost = numberOrNull(form.geotechFrostDepth);
+    if (geotechFrost !== null) {
+      siteFindings.push({
+        id: "uploaded-geo-frost-depth",
+        topic: "Frost protection",
+        metric: "frost_depth",
+        comparator: "minimum",
+        value: geotechFrost,
+        unit: "in",
+        sourceType: "geotechnical-report",
+        sourceTitle: "Uploaded geotechnical report",
+        citation: "Geotechnical/site report frost recommendation",
+        rationale: "Site-specific frost or soil conditions can require deeper protection."
+      });
+    }
+
+    const geotechGroundwater = numberOrNull(form.geotechGroundwaterClearance);
+    if (geotechGroundwater !== null) {
+      siteFindings.push({
+        id: "uploaded-water-clearance",
+        topic: "Groundwater",
+        metric: "groundwater_clearance",
+        comparator: "minimum",
+        value: geotechGroundwater,
+        unit: "ft",
+        sourceType: "water-table-source",
+        sourceTitle: "Uploaded geotechnical or water table report",
+        citation: "Seasonal high groundwater / water table recommendation",
+        rationale: "Use the stricter separation requirement when the site source exceeds the city minimum."
+      });
+    }
+
+    return siteFindings;
+  }
+
+  async function runStandardsReview(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setIsReviewing(true);
+    setMessage("");
+    setReviewResult(null);
+    setAiNarrative(null);
+
+    const response = await fetch("/api/reviews", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        proposal: {
+          projectName: form.projectName || form.applicant || "Untitled project",
+          clientId: form.clientId,
+          jurisdiction: form.city,
+          address: form.address || "Address not provided",
+          scopeTags: form.scopeTags,
+          proposalText: form.proposalText,
+          uploadedFiles: form.uploadedFiles,
+          measurements: [
+            {
+              metric: "aggregate_base_depth",
+              value: numberOrNull(form.aggregateBaseDepth),
+              unit: "in",
+              citation: "Proposal roadway section"
+            },
+            {
+              metric: "frost_depth",
+              value: numberOrNull(form.frostDepth),
+              unit: "in",
+              citation: "Proposal utility/profile notes"
+            },
+            {
+              metric: "groundwater_clearance",
+              value: numberOrNull(form.groundwaterClearance),
+              unit: "ft",
+              citation: "Proposal stormwater/site notes"
+            },
+            {
+              metric: "geotechnical_report_provided",
+              value: Boolean(form.geotechText || form.uploadedFiles.length),
+              citation: "Uploaded or pasted geotechnical report"
+            },
+            {
+              metric: "seismic_design_category",
+              value: form.seismicDesignCategory,
+              citation: "Proposal structural criteria"
+            }
+          ]
+        },
+        siteFindings: buildSiteFindings()
+      })
+    });
+
+    const data = (await response.json()) as ReviewApiResponse;
+    if (!response.ok || !data.ok || !data.review) {
+      setMessage(data.message ?? "The review API could not complete the review.");
+      setIsReviewing(false);
+      return;
+    }
+
+    setReviewResult(data.review);
+    setAiNarrative(data.aiNarrative ?? null);
+    setForm((current) => ({
+      ...current,
+      notes: [
+        data.aiNarrative,
+        ...data.review!.nextActions,
+        `Pass: ${data.review!.summary.pass}, fail: ${data.review!.summary.fail}, missing: ${data.review!.summary.missing}`
+      ]
+        .filter(Boolean)
+        .join("\n")
+    }));
+    setMessage("Standards review complete.");
+    setIsReviewing(false);
   }
 
   async function saveReview(event: FormEvent<HTMLFormElement>) {
@@ -133,6 +323,8 @@ export function AppShell() {
     } else {
       setReviews((current) => [data as Review, ...current]);
       setForm(emptyForm);
+      setReviewResult(null);
+      setAiNarrative(null);
       setMessage("Review saved.");
     }
 
@@ -140,22 +332,30 @@ export function AppShell() {
   }
 
   const readyForDatabase = Boolean(supabase);
-  const highRiskCount = reviews.filter((review) => review.risk_level === "high").length;
   const approvedCount = reviews.filter((review) => review.status === "approved").length;
+  const needsAttention =
+    (reviewResult?.summary.fail ?? 0) +
+    (reviewResult?.summary.missing ?? 0) +
+    (reviewResult?.summary.needsReview ?? 0);
 
   return (
     <main className="app">
       <section className="workspace">
         <header className="topbar">
           <div>
-            <p className="eyebrow">Secure review workspace</p>
+            <p className="eyebrow">Standards review workspace</p>
             <h1>City Form Reviewer</h1>
           </div>
+          {user ? (
+            <button className="icon-button" onClick={signOut} aria-label="Sign out">
+              <LogOut size={18} />
+            </button>
+          ) : null}
         </header>
 
         <div className="metrics">
           <Metric label="Saved reviews" value={reviews.length.toString()} />
-          <Metric label="High risk" value={highRiskCount.toString()} tone="warn" />
+          <Metric label="Needs attention" value={needsAttention.toString()} tone="warn" />
           <Metric label="Approved" value={approvedCount.toString()} tone="good" />
         </div>
 
@@ -163,97 +363,257 @@ export function AppShell() {
           <section className="notice">
             <Lock size={20} />
             <div>
-              <h2>Connect Supabase to make saving work</h2>
-              <p>
-                Add your free Supabase URL and anon key in Vercel or in a local `.env.local`
-                file. The app will stay private to each signed-in user through database rules.
-              </p>
+              <h2>Connect Supabase to save reviews</h2>
+              <p>Add the Supabase URL and anon key in Vercel or `.env.local`.</p>
             </div>
           </section>
         ) : null}
 
-        <div className="grid">
-          <section className="panel">
+        <div className="review-layout">
+          <section className="panel intake-panel">
             <div className="panel-heading">
               <div>
                 <p className="eyebrow">Intake</p>
-                <h2>New review</h2>
+                <h2>Proposal and site facts</h2>
               </div>
               <Plus size={20} />
             </div>
 
             {user ? (
-              <form className="form" onSubmit={saveReview}>
-                <label>
-                  City
-                  <input
-                    required
-                    value={form.city}
-                    onChange={(event) => setForm({ ...form, city: event.target.value })}
-                    placeholder="Bloomington"
-                  />
-                </label>
-                <label>
-                  Permit or form type
-                  <input
-                    required
-                    value={form.permit_type}
-                    onChange={(event) => setForm({ ...form, permit_type: event.target.value })}
-                    placeholder="Site plan review"
-                  />
-                </label>
-                <label>
-                  Applicant
-                  <input
-                    required
-                    value={form.applicant}
-                    onChange={(event) => setForm({ ...form, applicant: event.target.value })}
-                    placeholder="Applicant name"
-                  />
-                </label>
-                <div className="inline-fields">
+              <>
+                <form className="form" onSubmit={runStandardsReview}>
+                  <div className="inline-fields">
+                    <label>
+                      Client
+                      <select
+                        value={form.clientId}
+                        onChange={(event) =>
+                          setForm({
+                            ...form,
+                            clientId: event.target.value,
+                            city: event.target.value === "brigham-city" ? "Brigham City" : "Bloomington"
+                          })
+                        }
+                      >
+                        <option value="brigham-city">Brigham City</option>
+                        <option value="lmrwd">Lower Minnesota River Watershed District</option>
+                      </select>
+                    </label>
+                    <label>
+                      City
+                      <input
+                        required
+                        value={form.city}
+                        onChange={(event) => setForm({ ...form, city: event.target.value })}
+                      />
+                    </label>
+                  </div>
+
+                  <div className="inline-fields">
+                    <label>
+                      Project
+                      <input
+                        required
+                        value={form.projectName}
+                        onChange={(event) => setForm({ ...form, projectName: event.target.value })}
+                        placeholder="McDonald's redevelopment"
+                      />
+                    </label>
+                    <label>
+                      Applicant
+                      <input
+                        required
+                        value={form.applicant}
+                        onChange={(event) => setForm({ ...form, applicant: event.target.value })}
+                        placeholder="Applicant name"
+                      />
+                    </label>
+                  </div>
+
                   <label>
-                    Risk
-                    <select
-                      value={form.risk_level}
-                      onChange={(event) =>
-                        setForm({ ...form, risk_level: event.target.value as RiskLevel })
-                      }
-                    >
-                      <option value="low">Low</option>
-                      <option value="medium">Medium</option>
-                      <option value="high">High</option>
-                    </select>
+                    Address or area
+                    <input
+                      value={form.address}
+                      onChange={(event) => setForm({ ...form, address: event.target.value })}
+                      placeholder="Project address or parcel area"
+                    />
                   </label>
+
+                  <div className="scope-row">
+                    {scopeOptions.map((scope) => (
+                      <label className="check-label" key={scope.id}>
+                        <input
+                          type="checkbox"
+                          checked={form.scopeTags.includes(scope.id)}
+                          onChange={() => updateScope(scope.id)}
+                        />
+                        <span>{scope.label}</span>
+                      </label>
+                    ))}
+                  </div>
+
+                  <div className="field-group">
+                    <h3>Proposal values</h3>
+                    <div className="inline-fields">
+                      <label>
+                        Road base depth
+                        <input
+                          inputMode="decimal"
+                          value={form.aggregateBaseDepth}
+                          onChange={(event) =>
+                            setForm({ ...form, aggregateBaseDepth: event.target.value })
+                          }
+                          placeholder="inches"
+                        />
+                      </label>
+                      <label>
+                        Frost depth
+                        <input
+                          inputMode="decimal"
+                          value={form.frostDepth}
+                          onChange={(event) => setForm({ ...form, frostDepth: event.target.value })}
+                          placeholder="inches"
+                        />
+                      </label>
+                    </div>
+                    <div className="inline-fields">
+                      <label>
+                        Groundwater clearance
+                        <input
+                          inputMode="decimal"
+                          value={form.groundwaterClearance}
+                          onChange={(event) =>
+                            setForm({ ...form, groundwaterClearance: event.target.value })
+                          }
+                          placeholder="feet"
+                        />
+                      </label>
+                      <label className="check-label switch">
+                        <input
+                          type="checkbox"
+                          checked={form.seismicDesignCategory}
+                          onChange={(event) =>
+                            setForm({ ...form, seismicDesignCategory: event.target.checked })
+                          }
+                        />
+                        <span>Seismic category included</span>
+                      </label>
+                    </div>
+                  </div>
+
+                  <div className="field-group">
+                    <h3>Geotech or site report overrides</h3>
+                    <div className="inline-fields">
+                      <label>
+                        Report road base
+                        <input
+                          inputMode="decimal"
+                          value={form.geotechAggregateBaseDepth}
+                          onChange={(event) =>
+                            setForm({ ...form, geotechAggregateBaseDepth: event.target.value })
+                          }
+                          placeholder="inches"
+                        />
+                      </label>
+                      <label>
+                        Report frost depth
+                        <input
+                          inputMode="decimal"
+                          value={form.geotechFrostDepth}
+                          onChange={(event) =>
+                            setForm({ ...form, geotechFrostDepth: event.target.value })
+                          }
+                          placeholder="inches"
+                        />
+                      </label>
+                    </div>
+                    <label>
+                      Report groundwater clearance
+                      <input
+                        inputMode="decimal"
+                        value={form.geotechGroundwaterClearance}
+                        onChange={(event) =>
+                          setForm({ ...form, geotechGroundwaterClearance: event.target.value })
+                        }
+                        placeholder="feet"
+                      />
+                    </label>
+                  </div>
+
                   <label>
-                    Status
-                    <select
-                      value={form.status}
-                      onChange={(event) =>
-                        setForm({ ...form, status: event.target.value as ReviewStatus })
-                      }
-                    >
-                      <option value="draft">Draft</option>
-                      <option value="in_review">In review</option>
-                      <option value="needs_revision">Needs revision</option>
-                      <option value="approved">Approved</option>
-                    </select>
+                    Upload proposal or geotech files
+                    <input multiple onChange={(event) => updateFiles(event.target.files)} type="file" />
                   </label>
-                </div>
-                <label>
-                  Review notes
-                  <textarea
-                    required
-                    value={form.notes}
-                    onChange={(event) => setForm({ ...form, notes: event.target.value })}
-                    placeholder="Missing fields, document concerns, follow-up items..."
-                  />
-                </label>
-                <button className="primary" disabled={isBusy}>
-                  <Save size={18} />
-                  <span>{isBusy ? "Saving" : "Save review"}</span>
-                </button>
-              </form>
+
+                  <label>
+                    Proposal text
+                    <textarea
+                      value={form.proposalText}
+                      onChange={(event) => setForm({ ...form, proposalText: event.target.value })}
+                      placeholder="Paste proposal details, scope notes, or extracted PDF text."
+                    />
+                  </label>
+
+                  <label>
+                    Geotech report notes
+                    <textarea
+                      value={form.geotechText}
+                      onChange={(event) => setForm({ ...form, geotechText: event.target.value })}
+                      placeholder="Paste soil, frost, groundwater, pavement, or seismic recommendations."
+                    />
+                  </label>
+
+                  <button className="primary" disabled={isReviewing}>
+                    <SearchCheck size={18} />
+                    <span>{isReviewing ? "Reviewing" : "Run standards review"}</span>
+                  </button>
+                </form>
+
+                <form className="form save-form" onSubmit={saveReview}>
+                  <div className="inline-fields">
+                    <label>
+                      Risk
+                      <select
+                        value={form.risk_level}
+                        onChange={(event) =>
+                          setForm({ ...form, risk_level: event.target.value as RiskLevel })
+                        }
+                      >
+                        <option value="low">Low</option>
+                        <option value="medium">Medium</option>
+                        <option value="high">High</option>
+                      </select>
+                    </label>
+                    <label>
+                      Status
+                      <select
+                        value={form.status}
+                        onChange={(event) =>
+                          setForm({ ...form, status: event.target.value as ReviewStatus })
+                        }
+                      >
+                        <option value="draft">Draft</option>
+                        <option value="in_review">In review</option>
+                        <option value="needs_revision">Needs revision</option>
+                        <option value="approved">Approved</option>
+                      </select>
+                    </label>
+                  </div>
+                  <label>
+                    Review notes
+                    <textarea
+                      required
+                      value={form.notes}
+                      onChange={(event) => setForm({ ...form, notes: event.target.value })}
+                      placeholder="Run a standards review or enter reviewer notes."
+                    />
+                  </label>
+                  <button className="secondary" disabled={isBusy}>
+                    <Save size={18} />
+                    <span>{isBusy ? "Saving" : "Save review"}</span>
+                  </button>
+                </form>
+              </>
             ) : (
               <AuthForm
                 email={email}
@@ -266,50 +626,108 @@ export function AppShell() {
             )}
           </section>
 
-          <section className="panel">
+          <section className="panel result-panel">
             <div className="panel-heading">
               <div>
-                <p className="eyebrow">Queue</p>
-                <h2>Saved work</h2>
+                <p className="eyebrow">Results</p>
+                <h2>Controlling standards</h2>
               </div>
-              {user ? (
-                <button className="icon-button" onClick={signOut} aria-label="Sign out">
-                  <LogOut size={18} />
-                </button>
-              ) : null}
+              <Globe2 size={20} />
             </div>
 
             {message ? <p className="message">{message}</p> : null}
 
-            <div className="review-list">
-              {reviews.length === 0 ? (
-                <div className="empty">
-                  <Sparkles size={22} />
-                  <p>{user ? "No saved reviews yet." : "Sign in to see saved reviews."}</p>
+            {reviewResult ? (
+              <div className="result-stack">
+                <div className="result-summary">
+                  <Metric label="Pass" value={reviewResult.summary.pass.toString()} tone="good" />
+                  <Metric label="Fail" value={reviewResult.summary.fail.toString()} tone="bad" />
+                  <Metric label="Missing" value={reviewResult.summary.missing.toString()} tone="warn" />
                 </div>
-              ) : (
-                reviews.map((review) => (
-                  <article className="review-card" key={review.id}>
-                    <div>
-                      <h3>{review.applicant}</h3>
-                      <p>
-                        {review.city} · {review.permit_type}
-                      </p>
-                    </div>
-                    <div className="review-meta">
-                      <span className={`pill ${review.risk_level}`}>{review.risk_level}</span>
-                      <span className="pill status">
-                        {statusIcons[review.status]}
-                        {statusLabels[review.status]}
-                      </span>
-                    </div>
-                    <p className="notes">{review.notes}</p>
-                  </article>
-                ))
-              )}
-            </div>
+
+                {aiNarrative ? (
+                  <section className="narrative">
+                    <h3>AI reviewer note</h3>
+                    <p>{aiNarrative}</p>
+                  </section>
+                ) : null}
+
+                <div className="finding-list">
+                  {reviewResult.findings.map((finding) => (
+                    <article className="review-card" key={finding.requirementId}>
+                      <div>
+                        <h3>{finding.topic}</h3>
+                        <p>{finding.controllingSource}</p>
+                      </div>
+                      <div className="review-meta">
+                        <span className={`pill finding ${finding.status}`}>{finding.status}</span>
+                        <span className="pill status">
+                          Required {String(finding.requiredValue)}
+                          {finding.unit ? ` ${finding.unit}` : ""}
+                        </span>
+                        <span className="pill status">
+                          Submitted{" "}
+                          {finding.submittedValue === null
+                            ? "missing"
+                            : `${String(finding.submittedValue)}${finding.unit ? ` ${finding.unit}` : ""}`}
+                        </span>
+                      </div>
+                      <p className="notes">{finding.explanation}</p>
+                      <p className="citation">{finding.citation}</p>
+                    </article>
+                  ))}
+                </div>
+
+                <section className="source-list">
+                  <h3>Sources checked</h3>
+                  {reviewResult.sourcesUsed.map((source) => (
+                    <a href={source.url} key={source.id} rel="noreferrer" target="_blank">
+                      {source.name}
+                    </a>
+                  ))}
+                </section>
+              </div>
+            ) : (
+              <div className="empty">
+                <Sparkles size={22} />
+                <p>{user ? "Run a standards review to see findings." : "Sign in to start reviews."}</p>
+              </div>
+            )}
           </section>
         </div>
+
+        <section className="panel saved-panel">
+          <div className="panel-heading">
+            <div>
+              <p className="eyebrow">Queue</p>
+              <h2>Saved work</h2>
+            </div>
+          </div>
+          <div className="review-list">
+            {reviews.length === 0 ? (
+              <p className="muted">{user ? "No saved reviews yet." : "Sign in to see saved reviews."}</p>
+            ) : (
+              reviews.map((review) => (
+                <article className="review-card" key={review.id}>
+                  <div>
+                    <h3>{review.applicant}</h3>
+                    <p>
+                      {review.city} · {review.permit_type}
+                    </p>
+                  </div>
+                  <div className="review-meta">
+                    <span className={`pill ${review.risk_level}`}>{review.risk_level}</span>
+                    <span className="pill status">
+                      {statusIcons[review.status]}
+                      {statusLabels[review.status]}
+                    </span>
+                  </div>
+                  <p className="notes">{review.notes}</p>
+                </article>
+              ))
+            )}
+          </div>
+        </section>
       </section>
     </main>
   );
@@ -322,7 +740,7 @@ function Metric({
 }: {
   label: string;
   value: string;
-  tone?: "good" | "warn";
+  tone?: "good" | "warn" | "bad";
 }) {
   return (
     <div className={`metric ${tone ?? ""}`}>

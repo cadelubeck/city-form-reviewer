@@ -2,6 +2,10 @@
 
 A low-cost SaaS foundation for reviewing and saving city form intake work.
 
+The app now includes a standards-review API that compares proposal values against public
+city/client standards, then applies geotechnical or site-report requirements only when they are
+stricter than the city baseline.
+
 ## Cheapest production setup
 
 - Host the app on Vercel Hobby while validating the idea.
@@ -30,6 +34,8 @@ A low-cost SaaS foundation for reviewing and saving city form intake work.
    ```bash
    NEXT_PUBLIC_SUPABASE_URL=your-project-url
    NEXT_PUBLIC_SUPABASE_ANON_KEY=your-anon-key
+   OPENAI_API_KEY=optional-openai-key
+   OPENAI_MODEL=gpt-5-mini
    ```
 
 5. Start the app:
@@ -42,8 +48,19 @@ A low-cost SaaS foundation for reviewing and saving city form intake work.
 
 1. Import `cadelubeck/city-form-reviewer` into Vercel.
 2. Add the same two Supabase environment variables in Vercel.
-3. Deploy.
-4. In Supabase Authentication settings, add your Vercel URL to the allowed redirect URLs.
+3. Add `OPENAI_API_KEY` if you want AI reviewer notes. The API still returns rule-based findings
+   without it.
+4. Deploy.
+5. In Supabase Authentication settings, add your Vercel URL to the allowed redirect URLs.
+
+## Review API
+
+- `GET /api/reviews` confirms the API is live and returns the public source registry.
+- `POST /api/reviews` accepts proposal measurements and site/geotech findings, then returns
+  controlling requirements, findings, next actions, sources used, and optional AI notes.
+
+The current source registry includes Jones Civil public client references, Brigham City public
+standards, USGS seismic screening, FEMA flood mapping, and NRCS soils screening.
 
 ## Security notes
 
