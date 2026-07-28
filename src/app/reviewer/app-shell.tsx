@@ -3,6 +3,7 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import {
   AlertTriangle,
+  BookOpen,
   CheckCircle2,
   CircleDot,
   FileCheck2,
@@ -13,7 +14,9 @@ import {
   UserCircle,
   Save,
   SearchCheck,
-  Sparkles
+  Sparkles,
+  Trash2,
+  Upload
 } from "lucide-react";
 import type { User } from "@supabase/supabase-js";
 import { getSupabase } from "@/lib/supabase";
@@ -23,7 +26,9 @@ import type {
   ReviewStatus,
   RiskLevel,
   SiteFinding,
-  UsageEvent
+  UsageEvent,
+  EngineeringDocument,
+  EngineeringDocumentType
 } from "@/lib/types";
 
 const statusLabels: Record<ReviewStatus, string> = {
@@ -68,6 +73,10 @@ type ReviewApiResponse = {
   message?: string;
   review?: ReviewResult;
   aiNarrative?: string | null;
+  extraction?: {
+    detectedJurisdiction?: { city?: string | null; state?: string | null; confidence?: number };
+    projectScope?: string[];
+  };
 };
 
 const scopeOptions = [
@@ -78,6 +87,16 @@ const scopeOptions = [
   { id: "structure", label: "Structure" },
   { id: "commercial", label: "Commercial" }
 ];
+
+type DocumentFormState = {
+  title: string;
+  documentType: EngineeringDocumentType;
+  jurisdiction: string;
+  clientId: string;
+  projectTypes: string;
+  effectiveDate: string;
+  text: string;
+};
 
 export function AppShell() {
   const supabase = useMemo(() => getSupabase(), []);
@@ -91,11 +110,20 @@ export function AppShell() {
   const [form, setForm] = useState(emptyForm);
   const [reviewResult, setReviewResult] = useState<ReviewResult | null>(null);
   const [aiNarrative, setAiNarrative] = useState<string | null>(null);
+  const [extraction, setExtraction] = useState<ReviewApiResponse["extraction"]>();
   const [message, setMessage] = useState("");
   const [isBusy, setIsBusy] = useState(false);
   const [isReviewing, setIsReviewing] = useState(false);
-  const [activeView, setActiveView] = useState<"reviewer" | "profile">("reviewer");
+  const [activeView, setActiveView] = useState<"reviewer" | "documents" | "profile">("reviewer");
   const [usageEvents, setUsageEvents] = useState<UsageEvent[]>([]);
+  const [documents, setDocuments] = useState<EngineeringDocument[]>([]);
+  const [documentFile, setDocumentFile] = useState<File | null>(null);
+  const [documentBusy, setDocumentBusy] = useState(false);
+  const [documentForm, setDocumentForm] = useState<DocumentFormState>({
+    title: "", documentType: "city-standard" as EngineeringDocumentType,
+    jurisdiction: "Brigham City", clientId: "brigham-city",
+    projectTypes: "roadway, utility, site-development", effectiveDate: "", text: ""
+  });
 
   useEffect(() => {
     if (!supabase) {
@@ -173,6 +201,48 @@ export function AppShell() {
         setUsageEvents((data ?? []) as UsageEvent[]);
       });
   }, [activeView, supabase, user]);
+
+  useEffect(() => {
+    if (!supabase || !user || activeView !== "documents") return;
+    loadDocuments();
+  }, [activeView, supabase, user]);
+
+  async function authHeaders(): Promise<Record<string, string>> {
+    const token = supabase ? (await supabase.auth.getSession()).data.session?.access_token : null;
+    return token ? { Authorization: `Bearer ${token}` } : {};
+  }
+
+  async function loadDocuments() {
+    const response = await fetch("/api/documents", { headers: await authHeaders() });
+    const data = await response.json();
+    if (!response.ok) return setMessage(data.error ?? "Unable to load documents.");
+    setDocuments(data as EngineeringDocument[]);
+  }
+
+  async function uploadDocument(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!documentFile && !documentForm.text.trim()) return setMessage("Choose a file or paste document text.");
+    setDocumentBusy(true);
+    setMessage("");
+    const body = new FormData();
+    Object.entries(documentForm).forEach(([key, value]) => body.append(key, value));
+    if (documentFile) body.append("file", documentFile);
+    const response = await fetch("/api/documents", { method: "POST", headers: await authHeaders(), body });
+    const data = await response.json();
+    setDocumentBusy(false);
+    if (!response.ok) return setMessage(data.error ?? "Document extraction failed.");
+    setDocumentFile(null);
+    setDocumentForm((current) => ({ ...current, title: "", effectiveDate: "", text: "" }));
+    setMessage(`Extracted ${data.requirements?.length ?? 0} requirements from ${data.title}.`);
+    await loadDocuments();
+  }
+
+  async function deleteDocument(id: string) {
+    if (!confirm("Remove this source from the compliance library?")) return;
+    const response = await fetch(`/api/documents/${id}`, { method: "DELETE", headers: await authHeaders() });
+    if (!response.ok) return setMessage("Unable to remove document.");
+    await loadDocuments();
+  }
 
   async function submitAuth(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -381,6 +451,7 @@ export function AppShell() {
 
     setReviewResult(data.review);
     setAiNarrative(data.aiNarrative ?? null);
+    setExtraction(data.extraction);
     setForm((current) => ({
       ...current,
       notes: [
@@ -493,9 +564,15 @@ export function AppShell() {
             <h1>City Form Reviewer</h1>
           </div>
           <div className="topbar-actions">
+            <button className={`nav-button ${activeView === "reviewer" ? "active" : ""}`} onClick={() => setActiveView("reviewer")}>
+              <SearchCheck size={18} /><span>Reviews</span>
+            </button>
+            <button className={`nav-button ${activeView === "documents" ? "active" : ""}`} onClick={() => setActiveView("documents")}>
+              <BookOpen size={18} /><span>Standards library</span>
+            </button>
             <button
               className={`nav-button ${activeView === "profile" ? "active" : ""}`}
-              onClick={() => setActiveView(activeView === "profile" ? "reviewer" : "profile")}
+              onClick={() => setActiveView("profile")}
             >
               <UserCircle size={18} />
               <span>Profile</span>
@@ -508,6 +585,18 @@ export function AppShell() {
 
         {activeView === "profile" ? (
           <ProfileView user={user} events={usageEvents} />
+        ) : activeView === "documents" ? (
+          <DocumentLibrary
+            documents={documents}
+            form={documentForm}
+            file={documentFile}
+            busy={documentBusy}
+            message={message}
+            onForm={setDocumentForm}
+            onFile={setDocumentFile}
+            onSubmit={uploadDocument}
+            onDelete={deleteDocument}
+          />
         ) : (
         <>
         <div className="metrics">
@@ -781,6 +870,15 @@ export function AppShell() {
                   <Metric label="Missing" value={reviewResult.summary.missing.toString()} tone="warn" />
                 </div>
 
+                {extraction ? (
+                  <section className="scope-summary">
+                    <div><span>Detected jurisdiction</span><strong>
+                      {[extraction.detectedJurisdiction?.city, extraction.detectedJurisdiction?.state].filter(Boolean).join(", ") || form.city}
+                    </strong></div>
+                    <div><span>Project scope</span><strong>{extraction.projectScope?.join(", ") || form.scopeTags.join(", ")}</strong></div>
+                  </section>
+                ) : null}
+
                 {aiNarrative ? (
                   <section className="narrative">
                     <h3>AI reviewer note</h3>
@@ -809,10 +907,37 @@ export function AppShell() {
                         </span>
                       </div>
                       <p className="notes">{finding.explanation}</p>
-                      <p className="citation">{finding.citation}</p>
+                      {finding.recommendedCorrection ? <p className="correction">{finding.recommendedCorrection}</p> : null}
+                      <p className="citation">
+                        {finding.citation}
+                        {finding.sourcePage ? ` · Page ${finding.sourcePage}` : ""}
+                        {finding.sourceExcerpt ? ` · “${finding.sourceExcerpt}”` : ""}
+                      </p>
                     </article>
                   ))}
                 </div>
+
+                <section className="comparison-section">
+                  <h3>Controlling-standard comparison</h3>
+                  <div className="comparison-wrap">
+                    <table className="comparison-table">
+                      <thead><tr><th>Requirement</th><th>City/client</th><th>Site-specific</th><th>Controlling</th><th>Proposal</th><th>Result</th></tr></thead>
+                      <tbody>
+                        {reviewResult.controllingRequirements.map((item, index) => {
+                          const finding = reviewResult.findings[index];
+                          return <tr key={item.baseRequirement.id}>
+                            <td><strong>{item.baseRequirement.topic}</strong><small>{item.baseRequirement.metric}</small></td>
+                            <td>{String(item.baseRequirement.value)} {item.baseRequirement.unit ?? ""}<small>{item.baseRequirement.sourceTitle}</small></td>
+                            <td>{item.overrideApplied ? `${String(item.controlling.value)} ${item.controlling.unit ?? ""}` : item.conflict ? "Conflict" : "Not stricter"}</td>
+                            <td><strong>{String(item.controlling.value)} {item.controlling.unit ?? ""}</strong></td>
+                            <td>{finding.submittedValue === null ? "Missing" : String(finding.submittedValue)}</td>
+                            <td><span className={`pill finding ${finding.status}`}>{finding.status}</span></td>
+                          </tr>;
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </section>
 
                 <section className="source-list">
                   <h3>Sources checked</h3>
@@ -868,6 +993,74 @@ export function AppShell() {
         )}
       </section>
     </main>
+  );
+}
+
+function DocumentLibrary({
+  documents, form, file, busy, message, onForm, onFile, onSubmit, onDelete
+}: {
+  documents: EngineeringDocument[];
+  form: DocumentFormState;
+  file: File | null;
+  busy: boolean;
+  message: string;
+  onForm: React.Dispatch<React.SetStateAction<DocumentFormState>>;
+  onFile: (file: File | null) => void;
+  onSubmit: (event: FormEvent<HTMLFormElement>) => void;
+  onDelete: (id: string) => void;
+}) {
+  const types: Array<[EngineeringDocumentType, string]> = [
+    ["city-standard", "City standard"], ["client-standard", "Client standard"], ["manual", "Manual / specification"],
+    ["geotechnical-report", "Geotechnical report"], ["seismic-source", "Seismic report"],
+    ["water-table-source", "Groundwater report"], ["flood-source", "Floodplain source"],
+    ["soil-source", "Soils source"], ["environmental-report", "Other engineering report"]
+  ];
+  return (
+    <section className="document-view">
+      <div className="library-hero">
+        <div><p className="eyebrow">Controlled source registry</p><h2>Standards and site-document library</h2></div>
+        <div className="library-count"><strong>{documents.length}</strong><span>indexed sources</span></div>
+      </div>
+      {message ? <p className="message">{message}</p> : null}
+      <div className="library-layout">
+        <form className="panel form" onSubmit={onSubmit}>
+          <div className="panel-heading"><div><p className="eyebrow">Add source</p><h2>Upload and extract</h2></div><Upload size={20} /></div>
+          <label>Document title<input value={form.title} onChange={(event) => onForm({ ...form, title: event.target.value })} placeholder="Brigham City Public Works Standards" /></label>
+          <div className="inline-fields">
+            <label>Source type<select value={form.documentType} onChange={(event) => onForm({ ...form, documentType: event.target.value as EngineeringDocumentType })}>
+              {types.map(([value, label]) => <option value={value} key={value}>{label}</option>)}
+            </select></label>
+            <label>Effective date<input type="date" value={form.effectiveDate} onChange={(event) => onForm({ ...form, effectiveDate: event.target.value })} /></label>
+          </div>
+          <div className="inline-fields">
+            <label>Jurisdiction<input required value={form.jurisdiction} onChange={(event) => onForm({ ...form, jurisdiction: event.target.value })} /></label>
+            <label>Client<select value={form.clientId} onChange={(event) => onForm({ ...form, clientId: event.target.value })}>
+              <option value="">Any client</option><option value="brigham-city">Brigham City</option><option value="lmrwd">LMRWD</option>
+            </select></label>
+          </div>
+          <label>Project types<input value={form.projectTypes} onChange={(event) => onForm({ ...form, projectTypes: event.target.value })} placeholder="roadway, utility, stormwater" /></label>
+          <label className="file-drop">
+            <input type="file" accept=".pdf,.txt,text/plain,application/pdf" onChange={(event) => onFile(event.target.files?.[0] ?? null)} />
+            <Upload size={22} /><strong>{file ? file.name : "Choose PDF or TXT"}</strong><span>Maximum 25 MB</span>
+          </label>
+          <label>Or paste source text<textarea value={form.text} onChange={(event) => onForm({ ...form, text: event.target.value })} placeholder="Paste standards or engineering-report text…" /></label>
+          <button className="primary" disabled={busy}><Sparkles size={18} />{busy ? "Extracting requirements…" : "Add and extract source"}</button>
+        </form>
+        <section className="panel">
+          <div className="panel-heading"><div><p className="eyebrow">Indexed sources</p><h2>Available to reviews</h2></div><BookOpen size={20} /></div>
+          <div className="document-list">
+            {!documents.length ? <div className="empty"><BookOpen size={24} /><p>Upload your first controlling source.</p></div> :
+              documents.map((document) => <article className="document-card" key={document.id}>
+                <div className="document-icon">📄</div>
+                <div className="document-copy"><h3>{document.title}</h3><p>{document.document_type.replaceAll("-", " ")} · {document.jurisdiction || "Any jurisdiction"}</p>
+                  <div className="document-tags"><span>{document.requirements.length} requirements</span><span>{document.extraction_status}</span>{document.project_scope.slice(0, 3).map((scope) => <span key={scope}>{scope}</span>)}</div>
+                </div>
+                <button type="button" className="delete-button" onClick={() => onDelete(document.id)} aria-label={`Remove ${document.title}`}><Trash2 size={17} /></button>
+              </article>)}
+          </div>
+        </section>
+      </div>
+    </section>
   );
 }
 

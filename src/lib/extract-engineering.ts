@@ -67,6 +67,27 @@ const extractionSchema = {
   }
 };
 
+const extractionInstructions = (mode: "proposal" | "site-report" | "standard") => `Extract only explicit civil-engineering values and requirements. Never invent a value or citation.
+Use stable snake_case metrics. Prefer aggregate_base_depth, asphalt_thickness, frost_depth,
+groundwater_clearance, pipe_diameter, pipe_slope, compaction, trench_depth,
+seismic_design_category, and floodplain_elevation where applicable.
+"minimum" means the submitted value must be greater than or equal to the requirement.
+"maximum" means it must be less than or equal. Preserve units and short evidence excerpts.
+Page numbers must be supported by visible page markers; otherwise return null.
+Extraction mode: ${mode}.`;
+
+async function addEmbeddings(data: Extraction) {
+  const vectors = await embedTexts(
+    data.requirements.map((item) =>
+      [item.topic, item.metric, item.description, item.value, item.unit].filter(Boolean).join(" | ")
+    )
+  );
+  return {
+    ...data,
+    requirements: data.requirements.map((item, index) => ({ ...item, embedding: vectors[index] }))
+  };
+}
+
 export async function extractEngineeringRequirements(options: {
   text: string;
   context: string;
@@ -75,32 +96,42 @@ export async function extractEngineeringRequirements(options: {
   const result = await structuredResponse<Extraction>({
     name: "civil_engineering_requirements",
     schema: extractionSchema,
-    instructions: `Extract only explicit civil-engineering values and requirements. Never invent a value or citation.
-Use stable snake_case metrics. Prefer aggregate_base_depth, asphalt_thickness, frost_depth,
-groundwater_clearance, pipe_diameter, pipe_slope, compaction, trench_depth,
-seismic_design_category, and floodplain_elevation where applicable.
-"minimum" means the submitted value must be greater than or equal to the requirement.
-"maximum" means it must be less than or equal. Preserve units and short evidence excerpts.
-Page numbers must be supported by visible page markers; otherwise return null.
-Extraction mode: ${options.mode}.`,
+    instructions: extractionInstructions(options.mode),
     input: `${options.context}\n\nDOCUMENT:\n${options.text.slice(0, 180000)}`,
     maxOutputTokens: 12000
   });
-  const vectors = await embedTexts(
-    result.data.requirements.map((item) =>
-      [item.topic, item.metric, item.description, item.value, item.unit].filter(Boolean).join(" | ")
-    )
-  );
   return {
     ...result,
-    data: {
-      ...result.data,
-      requirements: result.data.requirements.map((item, index) => ({
-        ...item,
-        embedding: vectors[index]
-      }))
-    }
+    data: await addEmbeddings(result.data)
   };
+}
+
+export async function extractEngineeringFile(options: {
+  bytes: ArrayBuffer;
+  filename: string;
+  mediaType: string;
+  context: string;
+  mode: "proposal" | "site-report" | "standard";
+}) {
+  const base64 = Buffer.from(options.bytes).toString("base64");
+  const result = await structuredResponse<Extraction>({
+    name: "civil_engineering_document",
+    schema: extractionSchema,
+    instructions: extractionInstructions(options.mode),
+    input: [{
+      role: "user",
+      content: [
+        {
+          type: "input_file",
+          filename: options.filename,
+          file_data: `data:${options.mediaType};base64,${base64}`
+        },
+        { type: "input_text", text: options.context }
+      ]
+    }],
+    maxOutputTokens: 12000
+  });
+  return { ...result, data: await addEmbeddings(result.data) };
 }
 
 export function asProposalMeasurements(extraction: EmbeddedExtraction) {

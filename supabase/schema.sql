@@ -82,3 +82,6 @@ with check (auth.uid() = user_id);
 
 create index usage_events_user_created_idx
 on public.usage_events (user_id, created_at desc);
+
+-- Also run supabase/engineering-documents.sql to enable the standards and
+-- site-document library for existing projects.

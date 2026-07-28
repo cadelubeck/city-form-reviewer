@@ -38,6 +38,35 @@ export type RequirementSourceType =
 
 export type Comparator = "minimum" | "maximum" | "exact" | "presence";
 export type FindingStatus = "pass" | "fail" | "missing" | "needs-review";
+export type EngineeringDocumentType =
+  | "city-standard"
+  | "client-standard"
+  | "manual"
+  | "geotechnical-report"
+  | "environmental-report"
+  | "seismic-source"
+  | "water-table-source"
+  | "flood-source"
+  | "soil-source";
+
+export type EngineeringDocument = {
+  id: string;
+  user_id: string;
+  title: string;
+  document_type: EngineeringDocumentType;
+  jurisdiction: string;
+  client_id: string | null;
+  project_types: string[];
+  effective_date: string | null;
+  original_name: string | null;
+  extraction_status: "pending" | "complete" | "failed";
+  detected_jurisdiction: Record<string, unknown>;
+  project_scope: string[];
+  requirements: Array<Requirement | SiteFinding>;
+  openai_response_id: string | null;
+  created_at: string;
+  updated_at: string;
+};
 
 export type SourceRegistryItem = {
   id: string;
