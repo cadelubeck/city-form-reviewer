@@ -29,6 +29,9 @@ stricter than the city baseline.
    -- Paste the contents of supabase/schema.sql here.
    ```
 
+   For an existing database that already has the review schema, run only
+   `supabase/usage-events.sql` to add usage logging.
+
 4. Copy `.env.example` to `.env.local` and add:
 
    ```bash
@@ -66,6 +69,9 @@ standards, USGS seismic screening, FEMA flood mapping, and NRCS soils screening.
 
 - Database row-level security is enabled in `supabase/schema.sql`.
 - Users can only read, create, update, and delete their own reviews.
+- Supabase Auth securely hashes passwords; the application never stores readable passwords.
+- API usage and account activity are recorded in `usage_events`, protected by row-level security.
+- The Profile tab shows each user only their own request totals and recent troubleshooting activity.
 - Supabase service-role keys must never be added to the browser or committed to Git.
 - Security headers are configured in `next.config.ts`.
 - Keep `.env.local` private. It is ignored by Git.
