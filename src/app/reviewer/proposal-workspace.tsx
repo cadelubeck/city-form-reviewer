@@ -116,6 +116,11 @@ export function ProposalWorkspace({ user, mode }: { user: User; mode: Mode }) {
       user={user}
       headers={headers}
       onBack={() => setSelected(null)}
+      onNew={() => {
+        setSelected(null);
+        setMessage("");
+        setShowUpload(true);
+      }}
       onUpdate={updateProposal}
       onReplace={(proposal) => {
         setSelected(proposal);
@@ -186,10 +191,11 @@ export function ProposalWorkspace({ user, mode }: { user: User; mode: Mode }) {
             }, 120_000);
             const data = await response.json().catch(() => ({ error: `Upload failed with status ${response.status}.` }));
             if (!response.ok) return setMessage(data.error ?? "Upload failed.");
-            setSelected(data as Proposal); await load();
+            setSelected(data as Proposal);
+            setProposals((items) => [data as Proposal, ...items.filter((item) => item.id !== data.id)]);
           } catch (error) {
             setMessage(error instanceof Error && error.name === "TimeoutError"
-              ? "The initial extraction timed out. Your file was not lost—please retry with the deep review after the upload completes."
+              ? "The proposal save timed out. Check the queue before retrying."
               : error instanceof Error ? error.message : "Upload failed.");
           } finally {
             setBusy(false);
@@ -221,16 +227,16 @@ function ProposalUpload({ busy, onClose, onSubmit }: {
         <label>Client<input value={fields.client} onChange={(e) => setFields({ ...fields, client: e.target.value })} /></label>
         <label>Location / jurisdiction<input value={fields.location} onChange={(e) => setFields({ ...fields, location: e.target.value })} placeholder="Brigham City, UT" /></label>
       </div>
-      <label className="file-drop"><input type="file" accept=".pdf,.txt,application/pdf,text/plain" onChange={(e) => setFile(e.target.files?.[0] ?? null)} /><Upload size={22} /><strong>{file?.name ?? "Choose PDF or TXT"}</strong><span>Maximum 50 MB · AI extracts jurisdiction, scope, sections, and submitted values</span></label>
+      <label className="file-drop"><input type="file" accept=".pdf,.txt,application/pdf,text/plain" onChange={(e) => setFile(e.target.files?.[0] ?? null)} /><Upload size={22} /><strong>{file?.name ?? "Choose PDF or TXT"}</strong><span>Maximum 50 MB · Saved securely now; AI analysis starts only when requested</span></label>
       <label>Or paste proposal text<textarea value={fields.text} onChange={(e) => setFields({ ...fields, text: e.target.value })} /></label>
-      <button className="primary" disabled={busy || (!file && !fields.text.trim())}><Sparkles size={18} />{busy ? "Reading words and pages… this can take a few minutes" : "Create review"}</button>
+      <button className="primary" disabled={busy || (!file && !fields.text.trim())}><Upload size={18} />{busy ? "Saving proposal…" : "Save proposal"}</button>
     </form>
   </div>;
 }
 
-function ProposalDetail({ proposal, user, headers, onBack, onUpdate, onReplace, onDelete }: {
+function ProposalDetail({ proposal, user, headers, onBack, onNew, onUpdate, onReplace, onDelete }: {
   proposal: Proposal; user: User; headers: () => Promise<Record<string, string>>;
-  onBack: () => void; onUpdate: (patch: Partial<Proposal> & { id: string }) => Promise<void>;
+  onBack: () => void; onNew: () => void; onUpdate: (patch: Partial<Proposal> & { id: string }) => Promise<void>;
   onReplace: (proposal: Proposal) => void; onDelete: () => void;
 }) {
   const [sectionId, setSectionId] = useState(proposal.sections[0]?.id ?? "");
@@ -252,6 +258,9 @@ function ProposalDetail({ proposal, user, headers, onBack, onUpdate, onReplace, 
     ? lines.slice(section.startLine, proposal.sections[sectionIndex + 1]?.startLine ?? lines.length).join("\n")
     : viewedText;
   const pageReview = proposal.page_reviews?.find((item) => item.page === activePage);
+  const reviewJob = proposal.diagram_analysis as { responseId?: string; status?: string; startedAt?: string } | null;
+  const reviewRunning = busy === "deep" || reviewJob?.status === "queued" || reviewJob?.status === "in_progress";
+  const allFindings = proposal.page_reviews.flatMap((page) => page.findings.map((finding) => ({ ...finding, page: page.page })));
 
   useEffect(() => {
     headers().then((auth) => apiFetch("/api/team", { headers: auth })).then((response) => response.json())
@@ -384,6 +393,7 @@ function ProposalDetail({ proposal, user, headers, onBack, onUpdate, onReplace, 
   return <section className="proposal-detail">
     <div className="detail-toolbar">
       <button className="soft-button" onClick={onBack}><ChevronLeft size={17} />Queue</button>
+      <button className="soft-button" onClick={onNew}><Plus size={17} />New proposal</button>
       <div className="detail-title"><strong>{proposal.name}</strong><small>{proposal.client} · {proposal.location}</small></div>
       <select value={proposal.priority} onChange={(e) => onUpdate({ id: proposal.id, priority: e.target.value as ProposalPriority })}><option value="">No priority</option><option value="low">Low priority</option><option value="medium">Medium priority</option><option value="high">High priority</option></select>
       <select value={proposal.status} onChange={(e) => onUpdate({ id: proposal.id, status: e.target.value as ProposalStatus })}>{statuses.map((item) => <option key={item} value={item}>{statusLabel[item]}</option>)}</select>
@@ -397,17 +407,19 @@ function ProposalDetail({ proposal, user, headers, onBack, onUpdate, onReplace, 
         ? <button className="soft-button" onClick={() => onUpdate({ id: proposal.id, archived_at: null })}><RefreshCw size={16} />Restore</button>
         : <button className="delete-button" onClick={onDelete} title="Archive proposal"><Trash2 size={16} /></button>}
     </div>
+    {reviewRunning ? <ReviewProgress status={reviewJob?.status ?? "in_progress"} /> : null}
     {message ? <p className="message">{message}</p> : null}
     <div className="detail-actions">
-      <button className="primary" onClick={runCompliance} disabled={!!busy}><CheckCircle2 size={17} />{busy === "compliance" ? "Reviewing…" : "Controlling standards"}</button>
-      <button className="soft-button" onClick={runDeepReview} disabled={!!busy}><FileSearch size={17} />{busy === "deep"
-        ? "Reviewing every page…"
+      <button className="primary" onClick={runDeepReview} disabled={!!busy}><FileSearch size={17} />{busy === "deep"
+        ? "Analyzing every page…"
         : (proposal.diagram_analysis as { status?: string } | null)?.status === "queued" ||
             (proposal.diagram_analysis as { status?: string } | null)?.status === "in_progress"
           ? "Continue background review"
-          : proposal.page_reviews?.length ? "Re-run deep page review" : "Deep review: words, pages & diagrams"}</button>
+          : proposal.page_reviews?.length ? "Re-analyze proposal" : "Analyze proposal"}</button>
+      <button className="soft-button" onClick={runCompliance} disabled={!!busy}><CheckCircle2 size={17} />{busy === "compliance" ? "Comparing…" : "Run structured standards comparison"}</button>
       <span>{proposal.project_scope.join(" · ") || "Scope not detected"}</span>
     </div>
+    {proposal.page_reviews?.length ? <ReviewTriage findings={allFindings} onOpenPage={setActivePage} /> : null}
     {proposal.page_reviews?.length ? <nav className="page-review-nav" aria-label="Reviewed pages">
       {proposal.page_reviews.map((page) => <button className={page.page === activePage ? "active" : ""} key={page.page} onClick={() => setActivePage(page.page)}>
         <span>Page {page.page}</span><small>{page.findings.filter((item) => item.severity !== "pass").length} flags</small>
@@ -438,6 +450,40 @@ function ProposalDetail({ proposal, user, headers, onBack, onUpdate, onReplace, 
     {proposal.compliance_review ? <ComplianceResults result={proposal.compliance_review} /> : null}
     {proposal.diagram_analysis ? <AnalysisPanel analysis={proposal.diagram_analysis} /> : null}
     {versionModal ? <VersionModal proposal={proposal} headers={headers} busy={busy} onBusy={setBusy} onClose={() => setVersionModal(false)} onSelect={(index) => { setSelectedVersion(index); setVersionModal(false); }} onUpdated={(updated) => { onReplace(updated); setSelectedVersion(null); setVersionModal(false); }} /> : null}
+  </section>;
+}
+
+function ReviewProgress({ status }: { status: string }) {
+  const active = status === "queued" ? 1 : 2;
+  const steps = ["Review requested", "Reading every page", "Organizing findings", "Engineer ready"];
+  return <section className="review-progress" role="status" aria-live="polite">
+    <div className="progress-heading"><strong>AI review in progress</strong><span>You can leave this proposal; the review continues safely.</span></div>
+    <div className="progress-track">{steps.map((step, index) => <div className={index <= active ? "active" : ""} key={step}>
+      <i>{index < active ? "✓" : index + 1}</i><span>{step}</span>
+    </div>)}</div>
+  </section>;
+}
+
+function ReviewTriage({ findings, onOpenPage }: {
+  findings: Array<PageReviewFinding & { page: number }>;
+  onOpenPage: (page: number) => void;
+}) {
+  const groups = [
+    { key: "fail", title: "Errors", className: "bad", items: findings.filter((item) => item.severity === "fail") },
+    { key: "missing", title: "Missing", className: "bad", items: findings.filter((item) => item.severity === "missing") },
+    { key: "warning", title: "Warnings", className: "warn", items: findings.filter((item) => item.severity === "warning" || item.severity === "engineer-review") }
+  ];
+  return <section className="review-triage panel">
+    <div className="panel-heading"><div><p className="eyebrow">Engineer quick review</p><h2>Errors, missing items, and warnings</h2></div>
+      <span className="triage-total">{groups.reduce((total, group) => total + group.items.length, 0)} decisions</span>
+    </div>
+    <div className="triage-metrics">{groups.map((group) => <div className={`metric ${group.className}`} key={group.key}><span>{group.title}</span><strong>{group.items.length}</strong></div>)}</div>
+    <div className="triage-groups">{groups.map((group) => group.items.length ? <details open={group.key !== "warning"} key={group.key}>
+      <summary>{group.title} <span>{group.items.length}</span></summary>
+      <div>{group.items.map((finding) => <button key={`${finding.page}-${finding.id}`} onClick={() => onOpenPage(finding.page)}>
+        <span>Page {finding.page}</span><strong>{finding.title}</strong><small>{finding.recommendedCorrection || finding.explanation}</small>
+      </button>)}</div>
+    </details> : null)}</div>
   </section>;
 }
 

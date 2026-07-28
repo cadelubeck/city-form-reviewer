@@ -1,6 +1,5 @@
 import { NextResponse } from "next/server";
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { extractEngineeringFile, extractEngineeringRequirements } from "@/lib/extract-engineering";
 import { authenticatedSupabase } from "@/lib/server-supabase";
 
 export const maxDuration = 300;
@@ -21,51 +20,25 @@ function detectSections(text: string) {
     : [{ id: crypto.randomUUID(), title: "Full document", startLine: 0, score: "green", notes: "" }];
 }
 
-async function extractProposal(
-  form: FormData,
-  storageClient: SupabaseClient,
-  companyId: string
-) {
+function prepareProposal(form: FormData, companyId: string) {
   const filePath = String(form.get("filePath") ?? "");
   const originalName = String(form.get("originalName") ?? "");
-  const fileType = String(form.get("fileType") ?? "");
   const pastedText = String(form.get("text") ?? "").trim();
   if (!filePath && !pastedText) throw new Error("Upload a PDF or TXT file, or paste proposal text.");
   if (filePath && !filePath.startsWith(`${companyId}/`)) throw new Error("The uploaded file path is invalid.");
-  let file: Blob | null = null;
-  if (filePath) {
-    const { data, error } = await storageClient.storage.from("proposal-files").download(filePath);
-    if (error || !data) throw new Error(error?.message ?? "The uploaded proposal could not be loaded.");
-    if (data.size > 50 * 1024 * 1024) throw new Error("Proposal exceeds the 50 MiB extraction limit.");
-    file = data;
-  }
   const name = String(form.get("name") ?? "").trim();
   const client = String(form.get("client") ?? "").trim();
   const location = String(form.get("location") ?? "").trim();
-  const context = `PROPOSAL: ${name}\nCLIENT: ${client}\nSUBMITTED LOCATION: ${location}\nExtract submitted design values, not governing standards.`;
-  const rawText = file && fileType !== "application/pdf" ? await file.text() : pastedText;
-  const extraction = file && fileType === "application/pdf"
-    ? await extractEngineeringFile({
-        bytes: await file.arrayBuffer(),
-        filename: originalName || "proposal.pdf",
-        mediaType: fileType,
-        context,
-        mode: "proposal"
-      })
-    : await extractEngineeringRequirements({ text: rawText, context, mode: "proposal" });
-  const searchableText = rawText || extraction.data.requirements
-    .map((item) => `${item.topic}\n${item.description}\n${item.excerpt}`)
-    .join("\n\n");
   return {
     name,
     client,
     location,
-    original_name: file ? originalName : null,
-    text_content: searchableText,
-    detected_jurisdiction: extraction.data.jurisdiction,
-    project_scope: extraction.data.projectScope,
-    extracted_requirements: extraction.data.requirements,
-    sections: detectSections(searchableText)
+    original_name: filePath ? originalName : null,
+    text_content: pastedText,
+    detected_jurisdiction: {},
+    project_scope: [],
+    extracted_requirements: [],
+    sections: detectSections(pastedText)
   };
 }
 
@@ -110,7 +83,7 @@ export async function POST(request: Request) {
   if (!auth) return NextResponse.json({ error: "Authentication required." }, { status: 401 });
   try {
     const form = await request.formData();
-    const proposal = await extractProposal(form, auth.client, auth.companyId);
+    const proposal = prepareProposal(form, auth.companyId);
     if (!proposal.name) return NextResponse.json({ error: "Project name is required." }, { status: 400 });
     const existingId = String(form.get("proposalId") ?? "");
     const submittedFilePath = String(form.get("filePath") ?? "");
@@ -168,7 +141,7 @@ export async function POST(request: Request) {
     });
     return NextResponse.json(await withFileUrl(auth.client, data));
   } catch (error) {
-    return NextResponse.json({ error: error instanceof Error ? error.message : "Proposal extraction failed." }, { status: 500 });
+    return NextResponse.json({ error: error instanceof Error ? error.message : "Proposal save failed." }, { status: 500 });
   }
 }
 

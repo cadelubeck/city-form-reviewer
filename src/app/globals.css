@@ -1195,6 +1195,161 @@ button:disabled {
   background: #fff;
 }
 
+.review-progress {
+  display: grid;
+  gap: 13px;
+  margin-bottom: 14px;
+  padding: 15px 18px;
+  border: 1px solid #bfdbfe;
+  border-radius: 13px;
+  background: linear-gradient(135deg, #eff6ff, #eef2ff);
+}
+
+.progress-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  color: #1e3a8a;
+}
+
+.progress-heading span {
+  font-size: .73rem;
+  color: #64748b;
+}
+
+.progress-track {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+}
+
+.progress-track div {
+  position: relative;
+  display: grid;
+  justify-items: center;
+  gap: 6px;
+  color: #94a3b8;
+  font-size: .68rem;
+  font-weight: 700;
+  text-align: center;
+}
+
+.progress-track div:not(:last-child)::after {
+  position: absolute;
+  top: 13px;
+  left: calc(50% + 16px);
+  width: calc(100% - 32px);
+  height: 3px;
+  content: "";
+  background: #cbd5e1;
+}
+
+.progress-track div.active:not(:last-child)::after {
+  background: #3b82f6;
+}
+
+.progress-track i {
+  z-index: 1;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: #e2e8f0;
+  color: #64748b;
+  font-style: normal;
+}
+
+.progress-track div.active {
+  color: #1d4ed8;
+}
+
+.progress-track div.active i {
+  background: #2563eb;
+  color: #fff;
+  box-shadow: 0 0 0 4px rgb(37 99 235 / 12%);
+}
+
+.review-triage {
+  display: grid;
+  gap: 14px;
+  margin-bottom: 14px;
+  padding: 18px;
+}
+
+.triage-total {
+  padding: 5px 9px;
+  border-radius: 999px;
+  background: #f1f5f9;
+  color: #475569;
+  font-size: .7rem;
+  font-weight: 800;
+}
+
+.triage-metrics {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.triage-metrics .metric {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 11px 13px;
+  border-radius: 9px;
+}
+
+.triage-metrics .metric.bad { background: #fef2f2; color: #b91c1c; }
+.triage-metrics .metric.warn { background: #fffbeb; color: #b45309; }
+.triage-metrics strong { font-size: 1.25rem; }
+
+.triage-groups {
+  display: grid;
+  gap: 8px;
+}
+
+.triage-groups details {
+  overflow: hidden;
+  border: 1px solid #e2e8f0;
+  border-radius: 9px;
+}
+
+.triage-groups summary {
+  padding: 10px 12px;
+  cursor: pointer;
+  color: #334155;
+  font-size: .75rem;
+  font-weight: 800;
+}
+
+.triage-groups summary span {
+  margin-left: 5px;
+  color: #94a3b8;
+}
+
+.triage-groups details > div {
+  display: grid;
+  border-top: 1px solid #e2e8f0;
+}
+
+.triage-groups button {
+  display: grid;
+  grid-template-columns: 65px 1fr;
+  gap: 3px 10px;
+  padding: 10px 12px;
+  border: 0;
+  border-bottom: 1px solid #f1f5f9;
+  border-radius: 0;
+  background: #fff;
+  color: #334155;
+  text-align: left;
+}
+
+.triage-groups button:hover { background: #f8fafc; }
+.triage-groups button span { grid-row: span 2; color: #6366f1; font-size: .68rem; font-weight: 800; }
+.triage-groups button small { color: #64748b; }
+
 .page-review-nav button {
   display: grid;
   flex: 0 0 auto;

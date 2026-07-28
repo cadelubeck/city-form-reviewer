@@ -136,16 +136,33 @@ export function AppShell() {
       return;
     }
 
-    supabase.auth.getUser().then(({ data }) => {
-      setUser(data.user);
+    const loginKey = "city-form-reviewer-login-time";
+    const dailySessionMs = 24 * 60 * 60 * 1000;
+    const enforceDailyLogout = async () => {
+      const { data } = await supabase.auth.getUser();
+      const signedInAt = Number(localStorage.getItem(loginKey));
+      if (data.user && signedInAt && Date.now() - signedInAt >= dailySessionMs) {
+        await supabase.auth.signOut();
+        localStorage.removeItem(loginKey);
+        setMessage("For security, you were signed out after 24 hours. Please sign in again.");
+        setUser(null);
+      } else {
+        if (data.user && !signedInAt) localStorage.setItem(loginKey, String(Date.now()));
+        setUser(data.user);
+      }
       setAuthReady(true);
-    });
+    };
+    void enforceDailyLogout();
+    const timer = window.setInterval(() => void enforceDailyLogout(), 60_000);
 
     const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
       setUser(session?.user ?? null);
     });
 
-    return () => listener.subscription.unsubscribe();
+    return () => {
+      window.clearInterval(timer);
+      listener.subscription.unsubscribe();
+    };
   }, [supabase]);
 
   async function logUsage(
@@ -313,6 +330,7 @@ export function AppShell() {
         setMessage("Invalid email or password.");
       } else {
         if (data.user) {
+          localStorage.setItem("city-form-reviewer-login-time", String(Date.now()));
           await logUsage(data.user.id, "login_succeeded", {
             durationMs: Date.now() - startedAt
           });
@@ -327,6 +345,7 @@ export function AppShell() {
     if (!supabase) return;
     if (user) await logUsage(user.id, "logout");
     await supabase.auth.signOut();
+    localStorage.removeItem("city-form-reviewer-login-time");
     setForm(emptyForm);
     setReviewResult(null);
     setAiNarrative(null);
