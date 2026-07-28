@@ -215,7 +215,7 @@ function ProposalUpload({ busy, onClose, onSubmit }: {
         <label>Client<input value={fields.client} onChange={(e) => setFields({ ...fields, client: e.target.value })} /></label>
         <label>Location / jurisdiction<input value={fields.location} onChange={(e) => setFields({ ...fields, location: e.target.value })} placeholder="Brigham City, UT" /></label>
       </div>
-      <label className="file-drop"><input type="file" accept=".pdf,.txt,application/pdf,text/plain" onChange={(e) => setFile(e.target.files?.[0] ?? null)} /><Upload size={22} /><strong>{file?.name ?? "Choose PDF or TXT"}</strong><span>AI extracts jurisdiction, scope, sections, and submitted values</span></label>
+      <label className="file-drop"><input type="file" accept=".pdf,.txt,application/pdf,text/plain" onChange={(e) => setFile(e.target.files?.[0] ?? null)} /><Upload size={22} /><strong>{file?.name ?? "Choose PDF or TXT"}</strong><span>Maximum 50 MB · AI extracts jurisdiction, scope, sections, and submitted values</span></label>
       <label>Or paste proposal text<textarea value={fields.text} onChange={(e) => setFields({ ...fields, text: e.target.value })} /></label>
       <button className="primary" disabled={busy || (!file && !fields.text.trim())}><Sparkles size={18} />{busy ? "Reading words and pages… this can take a few minutes" : "Create review"}</button>
     </form>

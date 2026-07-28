@@ -59,6 +59,7 @@ export type EngineeringDocument = {
   project_types: string[];
   effective_date: string | null;
   original_name: string | null;
+  file_path: string | null;
   source_url: string | null;
   archived_at: string | null;
   extraction_status: "pending" | "complete" | "failed";

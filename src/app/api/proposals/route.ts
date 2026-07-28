@@ -36,7 +36,7 @@ async function extractProposal(
   if (filePath) {
     const { data, error } = await storageClient.storage.from("proposal-files").download(filePath);
     if (error || !data) throw new Error(error?.message ?? "The uploaded proposal could not be loaded.");
-    if (data.size > 25 * 1024 * 1024) throw new Error("Proposal exceeds the 25 MB extraction limit.");
+    if (data.size > 50_000_000) throw new Error("Proposal exceeds the 50 MB extraction limit.");
     file = data;
   }
   const name = String(form.get("name") ?? "").trim();

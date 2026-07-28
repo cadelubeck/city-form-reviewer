@@ -231,10 +231,32 @@ export function AppShell() {
     setMessage("");
     const body = new FormData();
     Object.entries(documentForm).forEach(([key, value]) => body.append(key, value));
-    if (documentFile) body.append("file", documentFile);
     try {
-      const response = await apiFetch("/api/documents", { method: "POST", headers: await authHeaders(), body }, 120_000);
-      const data = await response.json();
+      const auth = await authHeaders();
+      if (documentFile) {
+        const ticketResponse = await apiFetch("/api/proposals/upload", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", ...auth },
+          body: JSON.stringify({
+            filename: documentFile.name,
+            contentType: documentFile.type,
+            size: documentFile.size,
+            category: "standard"
+          })
+        });
+        const ticket = await ticketResponse.json().catch(() => ({ error: "The upload ticket could not be read." }));
+        if (!ticketResponse.ok) throw new Error(ticket.error ?? "Unable to prepare the private file upload.");
+        if (!supabase) throw new Error("File storage is not configured.");
+        const { error } = await supabase.storage
+          .from("proposal-files")
+          .uploadToSignedUrl(ticket.path, ticket.token, documentFile, { contentType: documentFile.type });
+        if (error) throw new Error(`Private file upload failed: ${error.message}`);
+        body.set("filePath", ticket.path);
+        body.set("originalName", documentFile.name);
+        body.set("fileType", documentFile.type);
+      }
+      const response = await apiFetch("/api/documents", { method: "POST", headers: auth, body }, 180_000);
+      const data = await response.json().catch(() => ({ error: `Document upload failed with status ${response.status}.` }));
       if (!response.ok) return setMessage(data.error ?? "Document extraction failed.");
       setDocumentFile(null);
       setDocumentForm((current) => ({ ...current, title: "", effectiveDate: "", sourceUrl: "", text: "" }));
@@ -1097,7 +1119,7 @@ function DocumentLibrary({
           <label>Official source link<input type="url" value={form.sourceUrl} onChange={(event) => onForm({ ...form, sourceUrl: event.target.value })} placeholder="https://city.gov/public-works/standards.pdf" /></label>
           <label className="file-drop">
             <input type="file" accept=".pdf,.txt,text/plain,application/pdf" onChange={(event) => onFile(event.target.files?.[0] ?? null)} />
-            <Upload size={22} /><strong>{file ? file.name : "Choose PDF or TXT"}</strong><span>Maximum 25 MB</span>
+            <Upload size={22} /><strong>{file ? file.name : "Choose PDF or TXT"}</strong><span>Maximum 50 MB</span>
           </label>
           <label>Or paste source text<textarea value={form.text} onChange={(event) => onForm({ ...form, text: event.target.value })} placeholder="Paste standards or engineering-report text…" /></label>
           <button className="primary" disabled={busy}><Sparkles size={18} />{busy ? "Extracting requirements…" : "Add and extract source"}</button>

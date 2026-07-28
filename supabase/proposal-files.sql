@@ -3,14 +3,15 @@ alter table public.proposals
   add column if not exists page_reviews jsonb not null default '[]'::jsonb;
 
 alter table public.engineering_documents
-  add column if not exists source_url text;
+  add column if not exists source_url text,
+  add column if not exists file_path text;
 
 insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
 values (
   'proposal-files',
   'proposal-files',
   false,
-  26214400,
+  50000000,
   array['application/pdf', 'text/plain']
 )
 on conflict (id) do update set

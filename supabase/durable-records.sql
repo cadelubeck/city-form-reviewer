@@ -18,6 +18,7 @@ alter table public.proposals add column if not exists page_reviews jsonb not nul
 alter table public.proposals add column if not exists archived_at timestamptz;
 alter table public.engineering_documents add column if not exists company_id uuid references public.companies(id);
 alter table public.engineering_documents add column if not exists source_url text;
+alter table public.engineering_documents add column if not exists file_path text;
 alter table public.engineering_documents add column if not exists archived_at timestamptz;
 
 insert into public.companies (name, created_by)
@@ -155,7 +156,7 @@ create index if not exists engineering_documents_company_updated_idx
 on public.engineering_documents (company_id, updated_at desc);
 
 insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
-values ('proposal-files', 'proposal-files', false, 26214400, array['application/pdf', 'text/plain'])
+values ('proposal-files', 'proposal-files', false, 50000000, array['application/pdf', 'text/plain'])
 on conflict (id) do update set
   public = excluded.public,
   file_size_limit = excluded.file_size_limit,

@@ -2,11 +2,31 @@ import { NextResponse } from "next/server";
 import { extractEngineeringFile, extractEngineeringRequirements } from "@/lib/extract-engineering";
 import { authenticatedSupabase } from "@/lib/server-supabase";
 import type { EngineeringDocumentType } from "@/lib/types";
+import type { SupabaseClient } from "@supabase/supabase-js";
 
 const allowedTypes = new Set<EngineeringDocumentType>([
   "city-standard", "client-standard", "manual", "geotechnical-report",
   "environmental-report", "seismic-source", "water-table-source", "flood-source", "soil-source"
 ]);
+
+async function loadStoredFile(
+  client: SupabaseClient,
+  companyId: string,
+  form: FormData
+) {
+  const filePath = String(form.get("filePath") ?? "");
+  if (!filePath) return { file: null, filePath: null, originalName: null, fileType: "" };
+  if (!filePath.startsWith(`${companyId}/standards/`)) throw new Error("The uploaded standard file path is invalid.");
+  const { data, error } = await client.storage.from("proposal-files").download(filePath);
+  if (error || !data) throw new Error(error?.message ?? "The uploaded standard could not be loaded.");
+  if (data.size > 50_000_000) throw new Error("Document exceeds the 50 MB extraction limit.");
+  return {
+    file: data,
+    filePath,
+    originalName: String(form.get("originalName") ?? ""),
+    fileType: String(form.get("fileType") ?? "")
+  };
+}
 
 export async function GET(request: Request) {
   const auth = await authenticatedSupabase(request);
@@ -27,28 +47,25 @@ export async function POST(request: Request) {
   if (!auth) return NextResponse.json({ error: "Authentication required." }, { status: 401 });
   try {
     const form = await request.formData();
-    const file = form.get("file");
+    const { file, filePath, originalName, fileType } = await loadStoredFile(auth.client, auth.companyId, form);
     const pastedText = String(form.get("text") ?? "").trim();
     const documentType = String(form.get("documentType") ?? "") as EngineeringDocumentType;
     if (!allowedTypes.has(documentType)) {
       return NextResponse.json({ error: "Unsupported document type." }, { status: 400 });
     }
-    if (!(file instanceof File) && !pastedText) {
+    if (!file && !pastedText) {
       return NextResponse.json({ error: "A PDF, text file, or pasted document text is required." }, { status: 400 });
     }
-    if (file instanceof File && file.size > 25 * 1024 * 1024) {
-      return NextResponse.json({ error: "Document exceeds the 25 MB extraction limit." }, { status: 413 });
-    }
-    const title = String(form.get("title") ?? "").trim() || (file instanceof File ? file.name : "Untitled source");
+    const title = String(form.get("title") ?? "").trim() || originalName || "Untitled source";
     const jurisdiction = String(form.get("jurisdiction") ?? "").trim();
     const clientId = String(form.get("clientId") ?? "").trim() || null;
     const projectTypes = String(form.get("projectTypes") ?? "").split(",").map((item) => item.trim()).filter(Boolean);
     const mode = ["city-standard", "client-standard", "manual"].includes(documentType) ? "standard" : "site-report";
     const context = `TITLE: ${title}\nSOURCE TYPE: ${documentType}\nJURISDICTION: ${jurisdiction}`;
-    const extraction = file instanceof File
-      ? file.type === "application/pdf"
+    const extraction = file
+      ? fileType === "application/pdf"
         ? await extractEngineeringFile({
-            bytes: await file.arrayBuffer(), filename: file.name, mediaType: file.type, context, mode
+            bytes: await file.arrayBuffer(), filename: originalName || "standard.pdf", mediaType: fileType, context, mode
           })
         : await extractEngineeringRequirements({ text: await file.text(), context, mode })
       : await extractEngineeringRequirements({ text: pastedText, context, mode });
@@ -81,7 +98,8 @@ export async function POST(request: Request) {
       client_id: clientId,
       project_types: projectTypes,
       effective_date: String(form.get("effectiveDate") ?? "") || null,
-      original_name: file instanceof File ? file.name : null,
+      original_name: file ? originalName : null,
+      file_path: filePath,
       source_url: String(form.get("sourceUrl") ?? "").trim() || null,
       extraction_status: "complete",
       detected_jurisdiction: extraction.data.jurisdiction,
