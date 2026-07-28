@@ -482,12 +482,12 @@ function ReviewTriage({ findings, missingInformation, onOpenPage }: {
   onOpenPage: (page: number) => void;
 }) {
   const groups = [
-    { key: "fail", title: "Errors", className: "bad", items: findings.filter((item) => item.severity === "fail") },
+    { key: "fail", title: "Failed", className: "bad", items: findings.filter((item) => item.severity === "fail") },
     { key: "missing", title: "Missing", className: "bad", items: findings.filter((item) => item.severity === "missing") },
     { key: "warning", title: "Warnings", className: "warn", items: findings.filter((item) => item.severity === "warning" || item.severity === "engineer-review") }
   ];
   return <section className="review-triage panel">
-    <div className="panel-heading"><div><p className="eyebrow">Engineer quick review</p><h2>Errors, missing items, and warnings</h2></div>
+    <div className="panel-heading"><div><p className="eyebrow">Engineer quick review</p><h2>Failed, missing items, and warnings</h2></div>
       <span className="triage-total">{groups.reduce((total, group) => total + group.items.length, missingInformation.length)} decisions</span>
     </div>
     <div className="triage-metrics">{groups.map((group) => <div className={`metric ${group.className}`} key={group.key}><span>{group.title}</span><strong>{group.items.length + (group.key === "missing" ? missingInformation.length : 0)}</strong></div>)}</div>
