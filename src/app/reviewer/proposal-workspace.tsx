@@ -181,13 +181,14 @@ export function ProposalWorkspace({ user, mode }: { user: User; mode: Mode }) {
             }, 120_000);
             const data = await response.json().catch(() => ({ error: `Upload failed with status ${response.status}.` }));
             if (!response.ok) return setMessage(data.error ?? "Upload failed.");
-            setShowUpload(false); setSelected(data as Proposal); await load();
+            setSelected(data as Proposal); await load();
           } catch (error) {
             setMessage(error instanceof Error && error.name === "TimeoutError"
               ? "The initial extraction timed out. Your file was not lost—please retry with the deep review after the upload completes."
               : error instanceof Error ? error.message : "Upload failed.");
           } finally {
             setBusy(false);
+            setShowUpload(false);
           }
         }}
       /> : null}
