@@ -14,6 +14,18 @@ export type Review = {
   updated_at: string;
 };
 
+export type UsageEvent = {
+  id: string;
+  user_id: string;
+  event_type: string;
+  endpoint: string | null;
+  method: string | null;
+  status_code: number | null;
+  duration_ms: number | null;
+  details: Record<string, unknown>;
+  created_at: string;
+};
+
 export type RequirementSourceType =
   | "city-standard"
   | "client-standard"

@@ -10,13 +10,21 @@ import {
   Lock,
   LogOut,
   Plus,
+  UserCircle,
   Save,
   SearchCheck,
   Sparkles
 } from "lucide-react";
 import type { User } from "@supabase/supabase-js";
 import { getSupabase } from "@/lib/supabase";
-import type { Review, ReviewResult, ReviewStatus, RiskLevel, SiteFinding } from "@/lib/types";
+import type {
+  Review,
+  ReviewResult,
+  ReviewStatus,
+  RiskLevel,
+  SiteFinding,
+  UsageEvent
+} from "@/lib/types";
 
 const statusLabels: Record<ReviewStatus, string> = {
   draft: "Draft",
@@ -74,6 +82,9 @@ const scopeOptions = [
 export function AppShell() {
   const supabase = useMemo(() => getSupabase(), []);
   const [user, setUser] = useState<User | null>(null);
+  const [authReady, setAuthReady] = useState(false);
+  const [authMode, setAuthMode] = useState<"login" | "register">("login");
+  const [fullName, setFullName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [reviews, setReviews] = useState<Review[]>([]);
@@ -83,11 +94,19 @@ export function AppShell() {
   const [message, setMessage] = useState("");
   const [isBusy, setIsBusy] = useState(false);
   const [isReviewing, setIsReviewing] = useState(false);
+  const [activeView, setActiveView] = useState<"reviewer" | "profile">("reviewer");
+  const [usageEvents, setUsageEvents] = useState<UsageEvent[]>([]);
 
   useEffect(() => {
-    if (!supabase) return;
+    if (!supabase) {
+      setAuthReady(true);
+      return;
+    }
 
-    supabase.auth.getUser().then(({ data }) => setUser(data.user));
+    supabase.auth.getUser().then(({ data }) => {
+      setUser(data.user);
+      setAuthReady(true);
+    });
 
     const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
       setUser(session?.user ?? null);
@@ -95,6 +114,30 @@ export function AppShell() {
 
     return () => listener.subscription.unsubscribe();
   }, [supabase]);
+
+  async function logUsage(
+    userId: string,
+    eventType: string,
+    data: {
+      endpoint?: string;
+      method?: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
+      statusCode?: number;
+      durationMs?: number;
+      details?: Record<string, unknown>;
+    } = {}
+  ) {
+    if (!supabase) return;
+    const { error } = await supabase.from("usage_events").insert({
+      user_id: userId,
+      event_type: eventType,
+      endpoint: data.endpoint ?? null,
+      method: data.method ?? null,
+      status_code: data.statusCode ?? null,
+      duration_ms: data.durationMs ?? null,
+      details: data.details ?? {}
+    });
+    if (error) console.error("Usage logging failed:", error.message);
+  }
 
   useEffect(() => {
     if (!supabase || !user) {
@@ -115,34 +158,71 @@ export function AppShell() {
       });
   }, [supabase, user]);
 
-  async function signIn(event: FormEvent<HTMLFormElement>) {
+  useEffect(() => {
+    if (!supabase || !user || activeView !== "profile") return;
+    supabase
+      .from("usage_events")
+      .select("*")
+      .order("created_at", { ascending: false })
+      .limit(500)
+      .then(({ data, error }) => {
+        if (error) {
+          setMessage(error.message);
+          return;
+        }
+        setUsageEvents((data ?? []) as UsageEvent[]);
+      });
+  }, [activeView, supabase, user]);
+
+  async function submitAuth(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!supabase) return;
     setIsBusy(true);
     setMessage("");
 
-    const { error } = await supabase.auth.signInWithPassword({ email, password });
-
-    if (error) {
-      const { error: signUpError } = await supabase.auth.signUp({ email, password });
-      setMessage(
-        signUpError
-          ? signUpError.message
-          : "Account created. Check your email if confirmation is enabled, then sign in."
-      );
+    if (authMode === "register") {
+      if (password.length < 12) {
+        setMessage("Password must be at least 12 characters.");
+        setIsBusy(false);
+        return;
+      }
+      const { data, error } = await supabase.auth.signUp({
+        email,
+        password,
+        options: { data: { full_name: fullName.trim() } }
+      });
+      if (error) {
+        setMessage(error.message);
+      } else {
+        if (data.user) await logUsage(data.user.id, "account_created");
+        setMessage("Account created. Check your email if confirmation is enabled.");
+      }
     } else {
-      setMessage("Signed in.");
+      const startedAt = Date.now();
+      const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+      if (error) {
+        setMessage("Invalid email or password.");
+      } else {
+        if (data.user) {
+          await logUsage(data.user.id, "login_succeeded", {
+            durationMs: Date.now() - startedAt
+          });
+        }
+        setMessage("Signed in.");
+      }
     }
     setIsBusy(false);
   }
 
   async function signOut() {
     if (!supabase) return;
+    if (user) await logUsage(user.id, "logout");
     await supabase.auth.signOut();
     setForm(emptyForm);
     setReviewResult(null);
     setAiNarrative(null);
     setMessage("Signed out.");
+    setActiveView("reviewer");
   }
 
   function updateScope(tag: string) {
@@ -228,6 +308,7 @@ export function AppShell() {
     setReviewResult(null);
     setAiNarrative(null);
 
+    const startedAt = Date.now();
     const response = await fetch("/api/reviews", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -276,6 +357,15 @@ export function AppShell() {
     });
 
     const data = (await response.json()) as ReviewApiResponse;
+    if (user) {
+      await logUsage(user.id, "api_request", {
+        endpoint: "/api/reviews",
+        method: "POST",
+        statusCode: response.status,
+        durationMs: Date.now() - startedAt,
+        details: { aiRequested: true }
+      });
+    }
     if (!response.ok || !data.ok || !data.review) {
       setMessage(data.message ?? "The review API could not complete the review.");
       setIsReviewing(false);
@@ -320,12 +410,17 @@ export function AppShell() {
 
     if (error) {
       setMessage(error.message);
+      await logUsage(user.id, "review_save_failed", {
+        statusCode: 400,
+        details: { message: error.message }
+      });
     } else {
       setReviews((current) => [data as Review, ...current]);
       setForm(emptyForm);
       setReviewResult(null);
       setAiNarrative(null);
       setMessage("Review saved.");
+      await logUsage(user.id, "review_saved");
     }
 
     setIsBusy(false);
@@ -338,6 +433,50 @@ export function AppShell() {
     (reviewResult?.summary.missing ?? 0) +
     (reviewResult?.summary.needsReview ?? 0);
 
+  if (!authReady) {
+    return <main className="auth-page"><p>Loading secure sign-in…</p></main>;
+  }
+
+  if (!user) {
+    return (
+      <main className="auth-page">
+        <section className="auth-shell">
+          <div className="auth-brand">
+            <div className="auth-mark">🏛</div>
+            <p className="eyebrow">Municipal review portal</p>
+            <h1>City Form Reviewer</h1>
+          </div>
+          {!readyForDatabase ? (
+            <section className="notice">
+              <Lock size={20} />
+              <div>
+                <h2>Supabase setup required</h2>
+                <p>Add the Supabase URL and anon key to continue.</p>
+              </div>
+            </section>
+          ) : (
+            <AuthForm
+              mode={authMode}
+              fullName={fullName}
+              email={email}
+              password={password}
+              isBusy={isBusy}
+              message={message}
+              onMode={(mode) => {
+                setAuthMode(mode);
+                setMessage("");
+              }}
+              onFullName={setFullName}
+              onEmail={setEmail}
+              onPassword={setPassword}
+              onSubmit={submitAuth}
+            />
+          )}
+        </section>
+      </main>
+    );
+  }
+
   return (
     <main className="app">
       <section className="workspace">
@@ -346,28 +485,29 @@ export function AppShell() {
             <p className="eyebrow">Standards review workspace</p>
             <h1>City Form Reviewer</h1>
           </div>
-          {user ? (
+          <div className="topbar-actions">
+            <button
+              className={`nav-button ${activeView === "profile" ? "active" : ""}`}
+              onClick={() => setActiveView(activeView === "profile" ? "reviewer" : "profile")}
+            >
+              <UserCircle size={18} />
+              <span>Profile</span>
+            </button>
             <button className="icon-button" onClick={signOut} aria-label="Sign out">
               <LogOut size={18} />
             </button>
-          ) : null}
+          </div>
         </header>
 
+        {activeView === "profile" ? (
+          <ProfileView user={user} events={usageEvents} />
+        ) : (
+        <>
         <div className="metrics">
           <Metric label="Saved reviews" value={reviews.length.toString()} />
           <Metric label="Needs attention" value={needsAttention.toString()} tone="warn" />
           <Metric label="Approved" value={approvedCount.toString()} tone="good" />
         </div>
-
-        {!readyForDatabase ? (
-          <section className="notice">
-            <Lock size={20} />
-            <div>
-              <h2>Connect Supabase to save reviews</h2>
-              <p>Add the Supabase URL and anon key in Vercel or `.env.local`.</p>
-            </div>
-          </section>
-        ) : null}
 
         <div className="review-layout">
           <section className="panel intake-panel">
@@ -379,8 +519,7 @@ export function AppShell() {
               <Plus size={20} />
             </div>
 
-            {user ? (
-              <>
+            <>
                 <form className="form" onSubmit={runStandardsReview}>
                   <div className="inline-fields">
                     <label>
@@ -613,17 +752,7 @@ export function AppShell() {
                     <span>{isBusy ? "Saving" : "Save review"}</span>
                   </button>
                 </form>
-              </>
-            ) : (
-              <AuthForm
-                email={email}
-                password={password}
-                isBusy={isBusy}
-                onEmail={setEmail}
-                onPassword={setPassword}
-                onSubmit={signIn}
-              />
-            )}
+            </>
           </section>
 
           <section className="panel result-panel">
@@ -690,7 +819,7 @@ export function AppShell() {
             ) : (
               <div className="empty">
                 <Sparkles size={22} />
-                <p>{user ? "Run a standards review to see findings." : "Sign in to start reviews."}</p>
+                <p>Run a standards review to see findings.</p>
               </div>
             )}
           </section>
@@ -705,7 +834,7 @@ export function AppShell() {
           </div>
           <div className="review-list">
             {reviews.length === 0 ? (
-              <p className="muted">{user ? "No saved reviews yet." : "Sign in to see saved reviews."}</p>
+              <p className="muted">No saved reviews yet.</p>
             ) : (
               reviews.map((review) => (
                 <article className="review-card" key={review.id}>
@@ -728,6 +857,8 @@ export function AppShell() {
             )}
           </div>
         </section>
+        </>
+        )}
       </section>
     </main>
   );
@@ -751,26 +882,58 @@ function Metric({
 }
 
 function AuthForm({
+  mode,
+  fullName,
   email,
   password,
   isBusy,
+  message,
+  onMode,
+  onFullName,
   onEmail,
   onPassword,
   onSubmit
 }: {
+  mode: "login" | "register";
+  fullName: string;
   email: string;
   password: string;
   isBusy: boolean;
+  message: string;
+  onMode: (mode: "login" | "register") => void;
+  onFullName: (value: string) => void;
   onEmail: (value: string) => void;
   onPassword: (value: string) => void;
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
 }) {
   return (
-    <form className="form" onSubmit={onSubmit}>
+    <div className="auth-card">
+      <div className="auth-tabs" role="tablist" aria-label="Account type">
+        <button className={mode === "login" ? "active" : ""} onClick={() => onMode("login")} type="button">
+          Existing user
+        </button>
+        <button className={mode === "register" ? "active" : ""} onClick={() => onMode("register")} type="button">
+          New user
+        </button>
+      </div>
+      <form className="form" onSubmit={onSubmit}>
+      {mode === "register" ? (
+        <label>
+          Full name
+          <input
+            required
+            autoComplete="name"
+            value={fullName}
+            onChange={(event) => onFullName(event.target.value)}
+            placeholder="Jane Smith"
+          />
+        </label>
+      ) : null}
       <label>
         Email
         <input
           required
+          autoComplete="email"
           type="email"
           value={email}
           onChange={(event) => onEmail(event.target.value)}
@@ -781,17 +944,80 @@ function AuthForm({
         Password
         <input
           required
-          minLength={8}
+          minLength={mode === "register" ? 12 : undefined}
           type="password"
+          autoComplete={mode === "register" ? "new-password" : "current-password"}
           value={password}
           onChange={(event) => onPassword(event.target.value)}
-          placeholder="At least 8 characters"
+          placeholder={mode === "register" ? "At least 12 characters" : "Your password"}
         />
       </label>
       <button className="primary" disabled={isBusy}>
         <Lock size={18} />
-        <span>{isBusy ? "Working" : "Sign in or create account"}</span>
+        <span>{isBusy ? "Working" : mode === "login" ? "Sign in" : "Create account"}</span>
       </button>
-    </form>
+      {message ? <p className="message">{message}</p> : null}
+      {mode === "register" ? <p className="security-note">Passwords are securely managed and hashed by Supabase Auth. They are never stored as readable text.</p> : null}
+      </form>
+    </div>
+  );
+}
+
+function ProfileView({ user, events }: { user: User; events: UsageEvent[] }) {
+  const apiEvents = events.filter((event) => event.event_type === "api_request");
+  const now = Date.now();
+  const recentCount = (days: number) =>
+    apiEvents.filter((event) => now - new Date(event.created_at).getTime() < days * 86400000).length;
+  const errors = apiEvents.filter((event) => (event.status_code ?? 0) >= 400).length;
+
+  return (
+    <section className="profile-view">
+      <div className="panel profile-identity">
+        <div className="profile-avatar">
+          {(user.user_metadata.full_name || user.email || "U").charAt(0).toUpperCase()}
+        </div>
+        <div>
+          <p className="eyebrow">Account</p>
+          <h2>{user.user_metadata.full_name || "City reviewer"}</h2>
+          <p className="muted">{user.email}</p>
+        </div>
+      </div>
+      <div className="usage-grid">
+        <Metric label="API requests today" value={recentCount(1).toString()} />
+        <Metric label="Last 7 days" value={recentCount(7).toString()} />
+        <Metric label="Last 30 days" value={recentCount(30).toString()} />
+        <Metric label="Request errors" value={errors.toString()} tone={errors ? "bad" : "good"} />
+      </div>
+      <section className="panel">
+        <div className="panel-heading">
+          <div>
+            <p className="eyebrow">Usage log</p>
+            <h2>Recent activity</h2>
+          </div>
+        </div>
+        {events.length === 0 ? (
+          <p className="muted">No activity recorded yet.</p>
+        ) : (
+          <div className="usage-table-wrap">
+            <table className="usage-table">
+              <thead>
+                <tr><th>Time</th><th>Activity</th><th>Request</th><th>Status</th><th>Duration</th></tr>
+              </thead>
+              <tbody>
+                {events.slice(0, 50).map((event) => (
+                  <tr key={event.id}>
+                    <td>{new Date(event.created_at).toLocaleString()}</td>
+                    <td>{event.event_type.replaceAll("_", " ")}</td>
+                    <td>{event.method && event.endpoint ? `${event.method} ${event.endpoint}` : "—"}</td>
+                    <td>{event.status_code ?? "—"}</td>
+                    <td>{event.duration_ms === null ? "—" : `${event.duration_ms} ms`}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+    </section>
   );
 }
