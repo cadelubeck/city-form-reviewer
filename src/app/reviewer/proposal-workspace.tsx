@@ -17,6 +17,32 @@ const statusLabel: Record<ProposalStatus, string> = {
   accepted: "Accepted", rejected: "Rejected"
 };
 
+async function uploadProposalFile(
+  form: FormData,
+  authHeaders: Record<string, string>
+) {
+  const file = form.get("file");
+  if (!(file instanceof File)) return form;
+  const ticketResponse = await apiFetch("/api/proposals/upload", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...authHeaders },
+    body: JSON.stringify({ filename: file.name, contentType: file.type, size: file.size })
+  });
+  const ticket = await ticketResponse.json().catch(() => ({ error: "The upload ticket could not be read." }));
+  if (!ticketResponse.ok) throw new Error(ticket.error ?? "Unable to prepare the private file upload.");
+  const supabase = getSupabase();
+  if (!supabase) throw new Error("File storage is not configured.");
+  const { error } = await supabase.storage
+    .from("proposal-files")
+    .uploadToSignedUrl(ticket.path, ticket.token, file, { contentType: file.type });
+  if (error) throw new Error(`Private file upload failed: ${error.message}`);
+  form.delete("file");
+  form.set("filePath", ticket.path);
+  form.set("originalName", file.name);
+  form.set("fileType", file.type);
+  return form;
+}
+
 export function ProposalWorkspace({ user, mode }: { user: User; mode: Mode }) {
   const supabase = useMemo(() => getSupabase(), []);
   const [proposals, setProposals] = useState<Proposal[]>([]);
@@ -147,8 +173,10 @@ export function ProposalWorkspace({ user, mode }: { user: User; mode: Mode }) {
         onSubmit={async (form) => {
           setBusy(true); setMessage("");
           try {
+            const auth = await headers();
+            const preparedForm = await uploadProposalFile(form, auth);
             const response = await apiFetch("/api/proposals", {
-              method: "POST", headers: await headers(), body: form,
+              method: "POST", headers: auth, body: preparedForm,
               signal: AbortSignal.timeout(290_000)
             }, 120_000);
             const data = await response.json().catch(() => ({ error: `Upload failed with status ${response.status}.` }));
@@ -446,18 +474,27 @@ function VersionModal({ proposal, headers, busy, onBusy, onClose, onSelect, onUp
   async function upload() {
     if (!file) return;
     onBusy("version"); setError("");
-    const body = new FormData();
-    body.append("proposalId", proposal.id);
-    body.append("name", proposal.name);
-    body.append("client", proposal.client);
-    body.append("location", proposal.location);
-    body.append("versionLabel", label);
-    body.append("file", file);
-    const response = await apiFetch("/api/proposals", { method: "POST", headers: await headers(), body }, 120_000);
-    const data = await response.json();
-    onBusy("");
-    if (!response.ok) return setError(data.error ?? "Version upload failed.");
-    onUpdated(data as Proposal);
+    try {
+      const auth = await headers();
+      const body = new FormData();
+      body.append("proposalId", proposal.id);
+      body.append("name", proposal.name);
+      body.append("client", proposal.client);
+      body.append("location", proposal.location);
+      body.append("versionLabel", label);
+      body.append("file", file);
+      const preparedBody = await uploadProposalFile(body, auth);
+      const response = await apiFetch("/api/proposals", {
+        method: "POST", headers: auth, body: preparedBody
+      }, 120_000);
+      const data = await response.json().catch(() => ({ error: `Version upload failed with status ${response.status}.` }));
+      if (!response.ok) return setError(data.error ?? "Version upload failed.");
+      onUpdated(data as Proposal);
+    } catch (uploadError) {
+      setError(uploadError instanceof Error ? uploadError.message : "Version upload failed.");
+    } finally {
+      onBusy("");
+    }
   }
   return <div className="modal-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
     <section className="modal-card">

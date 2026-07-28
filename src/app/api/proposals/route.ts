@@ -21,21 +21,34 @@ function detectSections(text: string) {
     : [{ id: crypto.randomUUID(), title: "Full document", startLine: 0, score: "green", notes: "" }];
 }
 
-async function extractProposal(form: FormData) {
-  const file = form.get("file");
+async function extractProposal(
+  form: FormData,
+  storageClient: SupabaseClient,
+  companyId: string
+) {
+  const filePath = String(form.get("filePath") ?? "");
+  const originalName = String(form.get("originalName") ?? "");
+  const fileType = String(form.get("fileType") ?? "");
   const pastedText = String(form.get("text") ?? "").trim();
-  if (!(file instanceof File) && !pastedText) throw new Error("Upload a PDF or TXT file, or paste proposal text.");
-  if (file instanceof File && file.size > 25 * 1024 * 1024) throw new Error("Proposal exceeds the 25 MB extraction limit.");
+  if (!filePath && !pastedText) throw new Error("Upload a PDF or TXT file, or paste proposal text.");
+  if (filePath && !filePath.startsWith(`${companyId}/`)) throw new Error("The uploaded file path is invalid.");
+  let file: Blob | null = null;
+  if (filePath) {
+    const { data, error } = await storageClient.storage.from("proposal-files").download(filePath);
+    if (error || !data) throw new Error(error?.message ?? "The uploaded proposal could not be loaded.");
+    if (data.size > 25 * 1024 * 1024) throw new Error("Proposal exceeds the 25 MB extraction limit.");
+    file = data;
+  }
   const name = String(form.get("name") ?? "").trim();
   const client = String(form.get("client") ?? "").trim();
   const location = String(form.get("location") ?? "").trim();
   const context = `PROPOSAL: ${name}\nCLIENT: ${client}\nSUBMITTED LOCATION: ${location}\nExtract submitted design values, not governing standards.`;
-  const rawText = file instanceof File && file.type !== "application/pdf" ? await file.text() : pastedText;
-  const extraction = file instanceof File && file.type === "application/pdf"
+  const rawText = file && fileType !== "application/pdf" ? await file.text() : pastedText;
+  const extraction = file && fileType === "application/pdf"
     ? await extractEngineeringFile({
         bytes: await file.arrayBuffer(),
-        filename: file.name,
-        mediaType: file.type,
+        filename: originalName || "proposal.pdf",
+        mediaType: fileType,
         context,
         mode: "proposal"
       })
@@ -47,7 +60,7 @@ async function extractProposal(form: FormData) {
     name,
     client,
     location,
-    original_name: file instanceof File ? file.name : null,
+    original_name: file ? originalName : null,
     text_content: searchableText,
     detected_jurisdiction: extraction.data.jurisdiction,
     project_scope: extraction.data.projectScope,
@@ -97,20 +110,11 @@ export async function POST(request: Request) {
   if (!auth) return NextResponse.json({ error: "Authentication required." }, { status: 401 });
   try {
     const form = await request.formData();
-    const proposal = await extractProposal(form);
+    const proposal = await extractProposal(form, auth.client, auth.companyId);
     if (!proposal.name) return NextResponse.json({ error: "Project name is required." }, { status: 400 });
     const existingId = String(form.get("proposalId") ?? "");
-    const file = form.get("file");
-    let filePath: string | null = null;
-    if (file instanceof File) {
-      filePath = `${auth.companyId}/${crypto.randomUUID()}-${file.name.replace(/[^a-zA-Z0-9._-]/g, "_")}`;
-      const { error: uploadError } = await auth.client.storage
-        .from("proposal-files")
-        .upload(filePath, file, { contentType: file.type || "application/octet-stream", upsert: false });
-      if (uploadError) {
-        throw new Error(`The proposal was read but its original file could not be saved: ${uploadError.message}. Run supabase/proposal-files.sql, then retry.`);
-      }
-    }
+    const submittedFilePath = String(form.get("filePath") ?? "");
+    const filePath = submittedFilePath || null;
     if (existingId) {
       const { data: current, error: readError } = await auth.client
         .from("proposals").select("*").eq("id", existingId).single();
