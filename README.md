@@ -32,6 +32,10 @@ stricter than the city baseline.
    For an existing database that already has the review schema, run only
    `supabase/usage-events.sql` to add usage logging.
 
+   Then run `supabase/engineering-documents.sql` to enable the authenticated
+   standards and site-document library. This migration creates the document
+   metadata/requirement store, indexes, and row-level security policies.
+
 4. Copy `.env.example` to `.env.local` and add:
 
    ```bash
@@ -71,6 +75,8 @@ standards, USGS seismic screening, FEMA flood mapping, and NRCS soils screening.
 - The server uses the OpenAI Responses API with strict JSON Schema outputs.
 - Proposal and geotechnical/site-report text is converted into structured civil requirements.
 - Embeddings are generated for requirement-level semantic retrieval.
+- Reviews retrieve the current user’s matching sources by jurisdiction/client metadata,
+  then use exact metrics with embedding similarity as a controlled fallback.
 - The deterministic review engine—not the model—selects the controlling value.
 - City/client standards remain the baseline. A site source controls only when its value is
   deterministically comparable and stricter.

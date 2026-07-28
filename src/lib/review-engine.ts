@@ -16,8 +16,26 @@ function appliesToProposal(requirement: Requirement, proposal: ProposalSubmissio
   return sameClient && sameJurisdiction && sameScope;
 }
 
-function findSubmittedValue(measurements: ProposalMeasurement[], metric: string) {
-  return measurements.find((measurement) => measurement.metric === metric);
+function cosine(a?: number[], b?: number[]) {
+  if (!a?.length || !b?.length || a.length !== b.length) return 0;
+  let dot = 0;
+  let aa = 0;
+  let bb = 0;
+  for (let index = 0; index < a.length; index += 1) {
+    dot += a[index] * b[index];
+    aa += a[index] ** 2;
+    bb += b[index] ** 2;
+  }
+  return aa && bb ? dot / Math.sqrt(aa * bb) : 0;
+}
+
+function findSubmittedValue(measurements: ProposalMeasurement[], requirement: Requirement | SiteFinding) {
+  const exact = measurements.find((measurement) => measurement.metric === requirement.metric);
+  if (exact) return exact;
+  return measurements
+    .map((measurement) => ({ measurement, score: cosine(measurement.embedding, requirement.embedding) }))
+    .filter((candidate) => candidate.score >= 0.82)
+    .sort((a, b) => b.score - a.score)[0]?.measurement;
 }
 
 function canonicalUnit(unit?: string) {
@@ -152,7 +170,9 @@ export function selectControllingRequirements(
   siteFindings: SiteFinding[]
 ): ControllingRequirement[] {
   return standards.filter((standard) => appliesToProposal(standard, proposal)).map((baseRequirement) => {
-    const relatedFindings = siteFindings.filter((finding) => finding.metric === baseRequirement.metric);
+    const relatedFindings = siteFindings.filter((finding) =>
+      finding.metric === baseRequirement.metric || cosine(finding.embedding, baseRequirement.embedding) >= 0.82
+    );
     const incompatible = relatedFindings.find((finding) => !comparable(finding, baseRequirement));
     if (incompatible) {
       return {
@@ -197,7 +217,7 @@ export function reviewProposal(
 ): ReviewResult {
   const controllingRequirements = selectControllingRequirements(proposal, standards, siteFindings);
   const findings = controllingRequirements.map<ReviewFinding>(({ baseRequirement, controlling, conflict }) => {
-    const submitted = findSubmittedValue(proposal.measurements, controlling.metric);
+    const submitted = findSubmittedValue(proposal.measurements, controlling);
     const comparison = compareValue(controlling, submitted, conflict);
 
     return {

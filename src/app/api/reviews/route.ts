@@ -1,5 +1,4 @@
 import { NextResponse } from "next/server";
-import { createClient } from "@supabase/supabase-js";
 import { createAiReviewNarrative } from "@/lib/ai-review";
 import { reviewProposal } from "@/lib/review-engine";
 import { sourceRegistry, standardLibrary } from "@/lib/standards";
@@ -9,6 +8,8 @@ import {
   asSiteFindings,
   extractEngineeringRequirements
 } from "@/lib/extract-engineering";
+import { authenticatedSupabase } from "@/lib/server-supabase";
+import type { EngineeringDocument, Requirement } from "@/lib/types";
 
 type ReviewRequest = {
   proposal?: ProposalSubmission;
@@ -29,17 +30,6 @@ function isProposalSubmission(value: unknown): value is ProposalSubmission {
   );
 }
 
-async function isAuthorized(request: Request) {
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-  if (!url || !anonKey) return true;
-  const token = request.headers.get("authorization")?.replace(/^Bearer\s+/i, "");
-  if (!token) return false;
-  const supabase = createClient(url, anonKey, { auth: { persistSession: false } });
-  const { data, error } = await supabase.auth.getUser(token);
-  return !error && Boolean(data.user);
-}
-
 export async function GET() {
   return NextResponse.json({
     ok: true,
@@ -50,7 +40,8 @@ export async function GET() {
 }
 
 export async function POST(request: Request) {
-  if (!(await isAuthorized(request))) {
+  const auth = await authenticatedSupabase(request);
+  if (!auth && process.env.NEXT_PUBLIC_SUPABASE_URL) {
     return NextResponse.json({ ok: false, message: "Authentication required." }, { status: 401 });
   }
   const body = (await request.json()) as ReviewRequest;
@@ -105,7 +96,31 @@ export async function POST(request: Request) {
     ];
     extraction = { ...extraction, siteResponseId: siteExtraction.responseId };
   }
-  const review = reviewProposal(proposal, standardLibrary, siteFindings, sourceRegistry);
+  let dynamicStandards: Requirement[] = [];
+  if (auth) {
+    const { data } = await auth.client
+      .from("engineering_documents")
+      .select("*");
+    const documents = ((data ?? []) as EngineeringDocument[]).filter((document) =>
+      (!document.jurisdiction || document.jurisdiction.toLowerCase() === proposal.jurisdiction.toLowerCase()) &&
+      (!document.client_id || document.client_id === proposal.clientId)
+    );
+    dynamicStandards = documents
+      .filter((document) => ["city-standard", "client-standard", "manual"].includes(document.document_type))
+      .flatMap((document) => document.requirements as Requirement[]);
+    siteFindings = [
+      ...siteFindings,
+      ...documents
+        .filter((document) => !["city-standard", "client-standard", "manual"].includes(document.document_type))
+        .flatMap((document) => document.requirements as SiteFinding[])
+    ];
+  }
+  const review = reviewProposal(
+    proposal,
+    [...standardLibrary, ...dynamicStandards],
+    siteFindings,
+    sourceRegistry
+  );
   const aiNarrative = await createAiReviewNarrative(proposal, review);
 
   return NextResponse.json({
