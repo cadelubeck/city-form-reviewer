@@ -37,6 +37,7 @@ export async function POST(request: Request) {
   if (!email || !email.includes("@")) return NextResponse.json({ error: "A valid email is required." }, { status: 400 });
   const { data, error } = await auth.client.from("company_invites").insert({
     inviter_id: auth.user.id,
+    company_id: auth.companyId,
     email
   }).select("*").single();
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });

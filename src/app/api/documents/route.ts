@@ -11,10 +11,13 @@ const allowedTypes = new Set<EngineeringDocumentType>([
 export async function GET(request: Request) {
   const auth = await authenticatedSupabase(request);
   if (!auth) return NextResponse.json({ error: "Authentication required." }, { status: 401 });
-  const { data, error } = await auth.client
+  const includeArchived = new URL(request.url).searchParams.get("archived") === "true";
+  let query = auth.client
     .from("engineering_documents")
     .select("*")
     .order("updated_at", { ascending: false });
+  if (!includeArchived) query = query.is("archived_at", null);
+  const { data, error } = await query;
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
   return NextResponse.json(data);
 }
@@ -66,10 +69,12 @@ export async function POST(request: Request) {
       rationale: item.description,
       page: item.page,
       excerpt: item.excerpt,
+      sourceUrl: String(form.get("sourceUrl") ?? "").trim() || undefined,
       embedding: item.embedding
     }));
     const { data, error } = await auth.client.from("engineering_documents").insert({
       user_id: auth.user.id,
+      company_id: auth.companyId,
       title,
       document_type: documentType,
       jurisdiction,
@@ -77,6 +82,7 @@ export async function POST(request: Request) {
       project_types: projectTypes,
       effective_date: String(form.get("effectiveDate") ?? "") || null,
       original_name: file instanceof File ? file.name : null,
+      source_url: String(form.get("sourceUrl") ?? "").trim() || null,
       extraction_status: "complete",
       detected_jurisdiction: extraction.data.jurisdiction,
       project_scope: extraction.data.projectScope,

@@ -11,6 +11,7 @@ create table if not exists public.proposals (
   assigned_to_name text,
   due_date date,
   original_name text,
+  file_path text,
   text_content text not null default '',
   detected_jurisdiction jsonb not null default '{}'::jsonb,
   project_scope text[] not null default '{}',
@@ -20,6 +21,7 @@ create table if not exists public.proposals (
   versions jsonb not null default '[]'::jsonb,
   compliance_review jsonb,
   diagram_analysis jsonb,
+  page_reviews jsonb not null default '[]'::jsonb,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );

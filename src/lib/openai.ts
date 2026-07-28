@@ -1,5 +1,6 @@
 const RESPONSES_URL = "https://api.openai.com/v1/responses";
 const EMBEDDINGS_URL = "https://api.openai.com/v1/embeddings";
+const DEFAULT_TIMEOUT_MS = 240_000;
 
 function apiKey() {
   const key = process.env.OPENAI_API_KEY;
@@ -24,40 +25,62 @@ export async function structuredResponse<T>(options: {
   instructions: string;
   input: unknown;
   maxOutputTokens?: number;
+  reasoningEffort?: "none" | "low" | "medium" | "high" | "xhigh" | "max";
 }) {
-  const response = await fetch(RESPONSES_URL, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey()}`,
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify({
-      model: process.env.OPENAI_MODEL ?? "gpt-5.6-sol",
-      instructions: options.instructions,
-      input: options.input,
-      max_output_tokens: options.maxOutputTokens ?? 6000,
-      text: {
-        format: {
-          type: "json_schema",
-          name: options.name,
-          strict: true,
-          schema: options.schema
-        }
-      }
-    })
-  });
+  let lastError: Error | null = null;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      const response = await fetch(RESPONSES_URL, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${apiKey()}`,
+          "Content-Type": "application/json"
+        },
+        signal: AbortSignal.timeout(DEFAULT_TIMEOUT_MS),
+        body: JSON.stringify({
+          model: process.env.OPENAI_MODEL ?? "gpt-5.6-sol",
+          instructions: options.instructions,
+          input: options.input,
+          reasoning: { effort: options.reasoningEffort ?? "low" },
+          max_output_tokens: options.maxOutputTokens ?? 6000,
+          text: {
+            verbosity: "high",
+            format: {
+              type: "json_schema",
+              name: options.name,
+              strict: true,
+              schema: options.schema
+            }
+          }
+        })
+      });
 
-  const body = (await response.json()) as {
-    id?: string;
-    model?: string;
-    error?: { message?: string };
-    output_text?: string;
-    output?: Array<{ content?: Array<{ type?: string; text?: string }> }>;
-  };
-  if (!response.ok) throw new Error(body.error?.message ?? `OpenAI API error ${response.status}`);
-  const text = outputText(body);
-  if (!text) throw new Error("OpenAI returned no structured output.");
-  return { data: JSON.parse(text) as T, responseId: body.id, model: body.model };
+      const body = (await response.json()) as {
+        id?: string;
+        model?: string;
+        error?: { message?: string };
+        output_text?: string;
+        output?: Array<{ content?: Array<{ type?: string; text?: string }> }>;
+      };
+      if (!response.ok) {
+        const error = new Error(body.error?.message ?? `OpenAI API error ${response.status}`);
+        if (response.status === 429 || response.status >= 500) throw error;
+        throw Object.assign(error, { retryable: false });
+      }
+      const text = outputText(body);
+      if (!text) throw new Error("OpenAI returned no structured output.");
+      return { data: JSON.parse(text) as T, responseId: body.id, model: body.model };
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error("OpenAI request failed.");
+      const retryable = !("retryable" in lastError) || (lastError as Error & { retryable?: boolean }).retryable !== false;
+      if (!retryable || attempt === 1) break;
+      await new Promise((resolve) => setTimeout(resolve, 750));
+    }
+  }
+  if (lastError?.name === "TimeoutError") {
+    throw new Error("The AI review exceeded four minutes. Please retry; the document remains saved.");
+  }
+  throw lastError ?? new Error("OpenAI request failed.");
 }
 
 export async function embedTexts(input: string[]) {
@@ -68,6 +91,7 @@ export async function embedTexts(input: string[]) {
       Authorization: `Bearer ${apiKey()}`,
       "Content-Type": "application/json"
     },
+    signal: AbortSignal.timeout(60_000),
     body: JSON.stringify({
       model: process.env.OPENAI_EMBEDDING_MODEL ?? "text-embedding-3-small",
       input

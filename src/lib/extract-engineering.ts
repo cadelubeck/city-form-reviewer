@@ -98,7 +98,8 @@ export async function extractEngineeringRequirements(options: {
     schema: extractionSchema,
     instructions: extractionInstructions(options.mode),
     input: `${options.context}\n\nDOCUMENT:\n${options.text.slice(0, 180000)}`,
-    maxOutputTokens: 12000
+    maxOutputTokens: 6000,
+    reasoningEffort: "low"
   });
   return {
     ...result,
@@ -129,7 +130,8 @@ export async function extractEngineeringFile(options: {
         { type: "input_text", text: options.context }
       ]
     }],
-    maxOutputTokens: 12000
+    maxOutputTokens: 6000,
+    reasoningEffort: "low"
   });
   return { ...result, data: await addEmbeddings(result.data) };
 }

@@ -7,7 +7,7 @@ import {
   History, Link2, Plus, RefreshCw, Search, Sparkles, Trash2, Upload, UserRound
 } from "lucide-react";
 import { getSupabase } from "@/lib/supabase";
-import type { Proposal, ProposalPriority, ProposalSection, ProposalStatus, ReviewResult } from "@/lib/types";
+import type { PageReviewFinding, Proposal, ProposalPriority, ProposalSection, ProposalStatus, ReviewResult } from "@/lib/types";
 
 type Mode = "proposals" | "my-work" | "dashboard";
 const statuses: ProposalStatus[] = ["pending", "in_review", "needs_updates", "accepted", "rejected"];
@@ -23,6 +23,7 @@ export function ProposalWorkspace({ user, mode }: { user: User; mode: Mode }) {
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState("");
   const [showUpload, setShowUpload] = useState(false);
+  const [showArchived, setShowArchived] = useState(false);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
 
@@ -54,10 +55,11 @@ export function ProposalWorkspace({ user, mode }: { user: User; mode: Mode }) {
   }
 
   async function deleteProposal(id: string) {
-    if (!confirm("Delete this proposal and its review history?")) return;
+    if (!confirm("Archive this proposal? Its files, status, reviews, and history will be retained.")) return;
     const response = await fetch(`/api/proposals?id=${id}`, { method: "DELETE", headers: await headers() });
-    if (!response.ok) return setMessage("Unable to delete proposal.");
+    if (!response.ok) return setMessage("Unable to archive proposal.");
     setSelected(null);
+    setMessage("Proposal archived. The complete record remains available under Archived records.");
     await load();
   }
 
@@ -66,7 +68,8 @@ export function ProposalWorkspace({ user, mode }: { user: User; mode: Mode }) {
       .some((value) => value.toLowerCase().includes(search.toLowerCase()));
     const matchesStatus = !status || proposal.status === status;
     const matchesMode = mode !== "my-work" || proposal.assigned_to_id === user.id;
-    return matchesText && matchesStatus && matchesMode;
+    const matchesArchive = showArchived ? Boolean(proposal.archived_at) : !proposal.archived_at;
+    return matchesText && matchesStatus && matchesMode && matchesArchive;
   });
 
   if (selected) {
@@ -84,7 +87,7 @@ export function ProposalWorkspace({ user, mode }: { user: User; mode: Mode }) {
     />;
   }
 
-  if (mode === "dashboard") return <ProposalDashboard proposals={proposals} onOpen={setSelected} onRefresh={load} />;
+  if (mode === "dashboard") return <ProposalDashboard proposals={proposals.filter((item) => !item.archived_at)} onOpen={setSelected} onRefresh={load} />;
 
   return (
     <section className="proposal-hub">
@@ -107,6 +110,7 @@ export function ProposalWorkspace({ user, mode }: { user: User; mode: Mode }) {
           {statuses.map((item) => <option key={item} value={item}>{statusLabel[item]}</option>)}
         </select></label>
         <button className="soft-button" onClick={() => void load()}><RefreshCw size={16} />Refresh</button>
+        <button className={`soft-button ${showArchived ? "active" : ""}`} onClick={() => setShowArchived((value) => !value)}><History size={16} />{showArchived ? "Current records" : "Archived records"}</button>
       </div>
 
       <div className="queue-summary">
@@ -135,10 +139,21 @@ export function ProposalWorkspace({ user, mode }: { user: User; mode: Mode }) {
         onClose={() => setShowUpload(false)}
         onSubmit={async (form) => {
           setBusy(true); setMessage("");
-          const response = await fetch("/api/proposals", { method: "POST", headers: await headers(), body: form });
-          const data = await response.json(); setBusy(false);
-          if (!response.ok) return setMessage(data.error ?? "Upload failed.");
-          setShowUpload(false); setSelected(data as Proposal); await load();
+          try {
+            const response = await fetch("/api/proposals", {
+              method: "POST", headers: await headers(), body: form,
+              signal: AbortSignal.timeout(290_000)
+            });
+            const data = await response.json().catch(() => ({ error: `Upload failed with status ${response.status}.` }));
+            if (!response.ok) return setMessage(data.error ?? "Upload failed.");
+            setShowUpload(false); setSelected(data as Proposal); await load();
+          } catch (error) {
+            setMessage(error instanceof Error && error.name === "TimeoutError"
+              ? "The initial extraction timed out. Your file was not lost—please retry with the deep review after the upload completes."
+              : error instanceof Error ? error.message : "Upload failed.");
+          } finally {
+            setBusy(false);
+          }
         }}
       /> : null}
     </section>
@@ -167,7 +182,7 @@ function ProposalUpload({ busy, onClose, onSubmit }: {
       </div>
       <label className="file-drop"><input type="file" accept=".pdf,.txt,application/pdf,text/plain" onChange={(e) => setFile(e.target.files?.[0] ?? null)} /><Upload size={22} /><strong>{file?.name ?? "Choose PDF or TXT"}</strong><span>AI extracts jurisdiction, scope, sections, and submitted values</span></label>
       <label>Or paste proposal text<textarea value={fields.text} onChange={(e) => setFields({ ...fields, text: e.target.value })} /></label>
-      <button className="primary" disabled={busy || (!file && !fields.text.trim())}><Sparkles size={18} />{busy ? "Extracting proposal…" : "Create review"}</button>
+      <button className="primary" disabled={busy || (!file && !fields.text.trim())}><Sparkles size={18} />{busy ? "Reading words and pages… this can take a few minutes" : "Create review"}</button>
     </form>
   </div>;
 }
@@ -184,14 +199,18 @@ function ProposalDetail({ proposal, user, headers, onBack, onUpdate, onReplace, 
   const [versionModal, setVersionModal] = useState(false);
   const [selectedVersion, setSelectedVersion] = useState<number | null>(null);
   const [statute, setStatute] = useState({ title: "", url: "", relevance: "", jurisdiction: "" });
+  const [activePage, setActivePage] = useState(proposal.page_reviews?.[0]?.page ?? 1);
   const section = proposal.sections.find((item) => item.id === sectionId);
   const viewedVersion = selectedVersion === null ? null : proposal.versions[selectedVersion];
   const viewedText = viewedVersion?.text_content ?? proposal.text_content;
+  const viewedFileUrl = viewedVersion?.file_url ?? proposal.file_url;
+  const viewedFileName = viewedVersion?.original_name ?? proposal.original_name;
   const lines = viewedText.split("\n");
   const sectionIndex = proposal.sections.findIndex((item) => item.id === sectionId);
   const sectionText = section
     ? lines.slice(section.startLine, proposal.sections[sectionIndex + 1]?.startLine ?? lines.length).join("\n")
     : viewedText;
+  const pageReview = proposal.page_reviews?.find((item) => item.page === activePage);
 
   useEffect(() => {
     headers().then((auth) => fetch("/api/team", { headers: auth })).then((response) => response.json())
@@ -226,29 +245,49 @@ function ProposalDetail({ proposal, user, headers, onBack, onUpdate, onReplace, 
   async function analyzeSection() {
     if (!section) return;
     setBusy("section"); setMessage("");
-    const response = await fetch("/api/proposals/analyze", {
-      method: "POST", headers: { "Content-Type": "application/json", ...(await headers()) },
-      body: JSON.stringify({ mode: "section", projectName: proposal.name, sectionTitle: section.title, text: sectionText })
-    });
-    const data = await response.json(); setBusy("");
-    if (!response.ok) return setMessage(data.error ?? "AI review failed.");
-    await updateSection({ score: data.data.score, aiReview: data.data });
+    try {
+      const response = await fetch("/api/proposals/analyze", {
+        method: "POST", headers: { "Content-Type": "application/json", ...(await headers()) },
+        body: JSON.stringify({ mode: "section", projectName: proposal.name, sectionTitle: section.title, text: sectionText }),
+        signal: AbortSignal.timeout(290_000)
+      });
+      const data = await response.json().catch(() => ({ error: "The AI response could not be read." }));
+      if (!response.ok) return setMessage(data.error ?? "AI review failed.");
+      await updateSection({ score: data.data.score, aiReview: data.data });
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "AI review failed.");
+    } finally {
+      setBusy("");
+    }
   }
 
-  async function analyzeDiagrams() {
-    setBusy("diagrams"); setMessage("");
-    const response = await fetch("/api/proposals/analyze", {
-      method: "POST", headers: { "Content-Type": "application/json", ...(await headers()) },
-      body: JSON.stringify({ mode: "diagrams", projectName: proposal.name, text: proposal.text_content })
-    });
-    const data = await response.json(); setBusy("");
-    if (!response.ok) return setMessage(data.error ?? "Diagram analysis failed.");
-    await onUpdate({ id: proposal.id, diagram_analysis: data.data });
+  async function runDeepReview() {
+    setBusy("deep"); setMessage("The AI is reviewing every page, word, table, and diagram. This may take several minutes.");
+    try {
+      const response = await fetch("/api/proposals/analyze", {
+        method: "POST", headers: { "Content-Type": "application/json", ...(await headers()) },
+        body: JSON.stringify({ mode: "deep", proposalId: proposal.id }),
+        signal: AbortSignal.timeout(290_000)
+      });
+      const data = await response.json().catch(() => ({ error: "The AI response could not be read." }));
+      if (!response.ok) return setMessage(data.error ?? "Deep document review failed.");
+      const pages = data.data.pages ?? [];
+      await onUpdate({ id: proposal.id, page_reviews: pages, diagram_analysis: data.data, status: "in_review" });
+      setActivePage(pages[0]?.page ?? 1);
+      setMessage(`Deep review complete: ${pages.length} page${pages.length === 1 ? "" : "s"} reviewed.`);
+    } catch (error) {
+      setMessage(error instanceof Error && error.name === "TimeoutError"
+        ? "The deep review exceeded the browser wait limit. Retry it; the contract remains saved."
+        : error instanceof Error ? error.message : "Deep document review failed.");
+    } finally {
+      setBusy("");
+    }
   }
 
   async function runCompliance() {
     setBusy("compliance"); setMessage("");
-    const response = await fetch("/api/reviews", {
+    try {
+      const response = await fetch("/api/reviews", {
       method: "POST", headers: { "Content-Type": "application/json", ...(await headers()) },
       body: JSON.stringify({
         proposal: {
@@ -264,11 +303,17 @@ function ProposalDetail({ proposal, user, headers, onBack, onUpdate, onReplace, 
           }))
         },
         siteFindings: []
-      })
-    });
-    const data = await response.json(); setBusy("");
-    if (!response.ok || !data.review) return setMessage(data.message ?? "Compliance review failed.");
-    await onUpdate({ id: proposal.id, compliance_review: data.review });
+      }),
+      signal: AbortSignal.timeout(290_000)
+      });
+      const data = await response.json().catch(() => ({ message: "The review response could not be read." }));
+      if (!response.ok || !data.review) return setMessage(data.message ?? "Compliance review failed.");
+      await onUpdate({ id: proposal.id, compliance_review: data.review });
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Compliance review failed.");
+    } finally {
+      setBusy("");
+    }
   }
 
   return <section className="proposal-detail">
@@ -283,22 +328,31 @@ function ProposalDetail({ proposal, user, headers, onBack, onUpdate, onReplace, 
         void onUpdate({ id: proposal.id, assigned_to_id: member?.user_id ?? null, assigned_to_name: member ? (member.full_name || member.email) : null });
       }}><option value="">Unassigned</option>{team.map((member) => <option value={member.user_id} key={member.user_id}>{member.full_name || member.email}{member.user_id === user.id ? " (me)" : ""}</option>)}</select></label>
       <button className="soft-button" onClick={() => setVersionModal(true)}><History size={16} />v{proposal.versions.length + 1}</button>
-      <button className="delete-button" onClick={onDelete}><Trash2 size={16} /></button>
+      {proposal.archived_at
+        ? <button className="soft-button" onClick={() => onUpdate({ id: proposal.id, archived_at: null })}><RefreshCw size={16} />Restore</button>
+        : <button className="delete-button" onClick={onDelete} title="Archive proposal"><Trash2 size={16} /></button>}
     </div>
     {message ? <p className="message">{message}</p> : null}
     <div className="detail-actions">
       <button className="primary" onClick={runCompliance} disabled={!!busy}><CheckCircle2 size={17} />{busy === "compliance" ? "Reviewing…" : "Controlling standards"}</button>
-      <button className="soft-button" onClick={analyzeDiagrams} disabled={!!busy}><FileSearch size={17} />{busy === "diagrams" ? "Analyzing…" : "Analyze plans & diagrams"}</button>
+      <button className="soft-button" onClick={runDeepReview} disabled={!!busy}><FileSearch size={17} />{busy === "deep" ? "Reviewing every page…" : proposal.page_reviews?.length ? "Re-run deep page review" : "Deep review: words, pages & diagrams"}</button>
       <span>{proposal.project_scope.join(" · ") || "Scope not detected"}</span>
     </div>
+    {proposal.page_reviews?.length ? <nav className="page-review-nav" aria-label="Reviewed pages">
+      {proposal.page_reviews.map((page) => <button className={page.page === activePage ? "active" : ""} key={page.page} onClick={() => setActivePage(page.page)}>
+        <span>Page {page.page}</span><small>{page.findings.filter((item) => item.severity !== "pass").length} flags</small>
+      </button>)}
+    </nav> : null}
     <div className="viewer-grid">
-      <aside className="section-sidebar panel">
-        <p className="eyebrow">Sections</p>
-        {proposal.sections.map((item) => <button className={item.id === sectionId ? "active" : ""} key={item.id} onClick={() => setSectionId(item.id)}><span className={`score-dot ${item.score}`} />{item.title}</button>)}
-      </aside>
-      <section className="document-viewer panel"><div className="panel-heading"><div><p className="eyebrow">{viewedVersion ? `Archived ${viewedVersion.label}` : "Current document"}</p><h2>{section?.title ?? "Proposal text"}</h2></div><button className="soft-button" onClick={addHighlight}>Highlight selection</button></div><pre>{sectionText || "No extractable text was returned."}</pre></section>
+      <section className="document-viewer panel"><div className="panel-heading"><div><p className="eyebrow">{viewedVersion ? `Archived ${viewedVersion.label}` : `Original form · Page ${activePage}`}</p><h2>{viewedFileName ?? section?.title ?? "Proposal"}</h2></div><button className="soft-button" onClick={addHighlight}>Highlight selection</button></div>
+        {viewedFileUrl && viewedFileName?.toLowerCase().endsWith(".pdf")
+          ? <iframe key={`${selectedVersion}-${activePage}`} title={`${proposal.name}, page ${activePage}`} src={`${viewedFileUrl}#page=${activePage}&view=FitH`} />
+          : <pre>{sectionText || "No extractable text was returned."}</pre>}
+      </section>
       <aside className="review-sidebar panel">
-        <div className="panel-heading"><div><p className="eyebrow">Engineer review</p><h2>{section?.title ?? "Select a section"}</h2></div></div>
+        <div className="panel-heading"><div><p className="eyebrow">AI + engineer review</p><h2>{pageReview ? `Page ${pageReview.page}: ${pageReview.pageTitle}` : section?.title ?? "Select a section"}</h2></div></div>
+        {pageReview ? <PageReview page={pageReview} /> : <div className="deep-review-empty"><FileSearch size={24} /><strong>Run the deep page review</strong><p>The AI will inspect all visible text, tables, diagrams, dimensions, and notes, then organize cited findings beside each proposal page.</p></div>}
+        {proposal.sections.length > 1 ? <label>Manual review section<select value={sectionId} onChange={(e) => setSectionId(e.target.value)}>{proposal.sections.map((item) => <option value={item.id} key={item.id}>{item.title}</option>)}</select></label> : null}
         {section ? <>
           <label>Section disposition<select value={section.score} onChange={(e) => updateSection({ score: e.target.value as ProposalSection["score"] })}><option value="green">Pass / no concern</option><option value="yellow">Needs review</option><option value="red">Deficiency</option></select></label>
           <label>Review notes<textarea value={section.notes} onChange={(e) => updateSection({ notes: e.target.value })} placeholder="Concerns, corrections, and engineer notes…" /></label>
@@ -315,6 +369,30 @@ function ProposalDetail({ proposal, user, headers, onBack, onUpdate, onReplace, 
     {proposal.diagram_analysis ? <AnalysisPanel analysis={proposal.diagram_analysis} /> : null}
     {versionModal ? <VersionModal proposal={proposal} headers={headers} busy={busy} onBusy={setBusy} onClose={() => setVersionModal(false)} onSelect={(index) => { setSelectedVersion(index); setVersionModal(false); }} onUpdated={(updated) => { onReplace(updated); setSelectedVersion(null); setVersionModal(false); }} /> : null}
   </section>;
+}
+
+function PageReview({ page }: { page: Proposal["page_reviews"][number] }) {
+  return <div className="page-review">
+    <p className="page-summary">{page.summary}</p>
+    {page.visualObservations.length ? <details><summary>Visual and diagram observations</summary>
+      <ul>{page.visualObservations.map((item) => <li key={item}>{item}</li>)}</ul>
+    </details> : null}
+    <div className="page-findings">
+      {!page.findings.length ? <div className="finding-empty"><CheckCircle2 size={18} />No page-specific concern identified from the supplied standards.</div> : null}
+      {page.findings.map((finding: PageReviewFinding) => <article className={`page-finding ${finding.severity}`} key={finding.id}>
+        <div className="finding-heading"><span>{finding.severity.replace("-", " ")}</span><strong>{finding.title}</strong></div>
+        <dl>
+          <div><dt>Proposal evidence</dt><dd>{finding.proposalEvidence || "Not shown or unreadable"} <small>Page {finding.proposalPage}</small></dd></div>
+          <div><dt>Controlling standard</dt><dd>{finding.standardRequirement || "No supplied standard supports a deterministic comparison."}</dd></div>
+        </dl>
+        <p>{finding.explanation}</p>
+        {finding.recommendedCorrection ? <p className="correction"><strong>Correction:</strong> {finding.recommendedCorrection}</p> : null}
+        {finding.standardUrl
+          ? <a className="standard-link" href={finding.standardUrl} target="_blank" rel="noreferrer"><Link2 size={14} />{finding.standardTitle}{finding.standardPage ? ` · page ${finding.standardPage}` : ""}</a>
+          : finding.standardTitle ? <span className="library-citation">{finding.standardTitle}{finding.standardPage ? ` · page ${finding.standardPage}` : ""} · document library</span> : null}
+      </article>)}
+    </div>
+  </div>;
 }
 
 function VersionModal({ proposal, headers, busy, onBusy, onClose, onSelect, onUpdated }: {

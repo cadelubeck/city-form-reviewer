@@ -98,6 +98,7 @@ type DocumentFormState = {
   clientId: string;
   projectTypes: string;
   effectiveDate: string;
+  sourceUrl: string;
   text: string;
 };
 
@@ -125,7 +126,7 @@ export function AppShell() {
   const [documentForm, setDocumentForm] = useState<DocumentFormState>({
     title: "", documentType: "city-standard" as EngineeringDocumentType,
     jurisdiction: "Brigham City", clientId: "brigham-city",
-    projectTypes: "roadway, utility, site-development", effectiveDate: "", text: ""
+    projectTypes: "roadway, utility, site-development", effectiveDate: "", sourceUrl: "", text: ""
   });
 
   useEffect(() => {
@@ -235,7 +236,7 @@ export function AppShell() {
     setDocumentBusy(false);
     if (!response.ok) return setMessage(data.error ?? "Document extraction failed.");
     setDocumentFile(null);
-    setDocumentForm((current) => ({ ...current, title: "", effectiveDate: "", text: "" }));
+    setDocumentForm((current) => ({ ...current, title: "", effectiveDate: "", sourceUrl: "", text: "" }));
     setMessage(`Extracted ${data.requirements?.length ?? 0} requirements from ${data.title}.`);
     await loadDocuments();
   }
@@ -1079,6 +1080,7 @@ function DocumentLibrary({
             </select></label>
           </div>
           <label>Project types<input value={form.projectTypes} onChange={(event) => onForm({ ...form, projectTypes: event.target.value })} placeholder="roadway, utility, stormwater" /></label>
+          <label>Official source link<input type="url" value={form.sourceUrl} onChange={(event) => onForm({ ...form, sourceUrl: event.target.value })} placeholder="https://city.gov/public-works/standards.pdf" /></label>
           <label className="file-drop">
             <input type="file" accept=".pdf,.txt,text/plain,application/pdf" onChange={(event) => onFile(event.target.files?.[0] ?? null)} />
             <Upload size={22} /><strong>{file ? file.name : "Choose PDF or TXT"}</strong><span>Maximum 25 MB</span>

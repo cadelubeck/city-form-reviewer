@@ -59,6 +59,8 @@ export type EngineeringDocument = {
   project_types: string[];
   effective_date: string | null;
   original_name: string | null;
+  source_url: string | null;
+  archived_at: string | null;
   extraction_status: "pending" | "complete" | "failed";
   detected_jurisdiction: Record<string, unknown>;
   project_scope: string[];
@@ -189,6 +191,30 @@ export type ProposalSection = {
   };
 };
 
+export type PageReviewFinding = {
+  id: string;
+  category: string;
+  title: string;
+  severity: "pass" | "warning" | "fail" | "missing" | "engineer-review";
+  proposalEvidence: string;
+  proposalPage: number;
+  standardRequirement: string;
+  standardTitle: string;
+  standardPage: number | null;
+  standardUrl: string | null;
+  explanation: string;
+  recommendedCorrection: string;
+};
+
+export type ProposalPageReview = {
+  page: number;
+  pageTitle: string;
+  pageType: string;
+  summary: string;
+  visualObservations: string[];
+  findings: PageReviewFinding[];
+};
+
 export type ProposalHighlight = {
   id: string;
   text: string;
@@ -201,6 +227,8 @@ export type ProposalVersion = {
   label: string;
   original_name: string | null;
   uploaded_at: string;
+  file_path?: string | null;
+  file_url?: string | null;
   text_content?: string;
   sections?: ProposalSection[];
   extracted_requirements?: Array<Record<string, unknown>>;
@@ -209,6 +237,7 @@ export type ProposalVersion = {
 export type Proposal = {
   id: string;
   user_id: string;
+  company_id: string;
   name: string;
   client: string;
   location: string;
@@ -218,6 +247,8 @@ export type Proposal = {
   assigned_to_name: string | null;
   due_date: string | null;
   original_name: string | null;
+  file_path: string | null;
+  file_url?: string | null;
   text_content: string;
   detected_jurisdiction: Record<string, unknown>;
   project_scope: string[];
@@ -227,6 +258,8 @@ export type Proposal = {
   versions: ProposalVersion[];
   compliance_review: ReviewResult | null;
   diagram_analysis: Record<string, unknown> | null;
+  page_reviews: ProposalPageReview[];
+  archived_at: string | null;
   created_at: string;
   updated_at: string;
 };

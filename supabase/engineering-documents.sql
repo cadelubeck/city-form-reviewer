@@ -11,6 +11,7 @@ create table if not exists public.engineering_documents (
   project_types text[] not null default '{}',
   effective_date date,
   original_name text,
+  source_url text,
   extraction_status text not null default 'pending' check (extraction_status in ('pending', 'complete', 'failed')),
   detected_jurisdiction jsonb not null default '{}',
   project_scope text[] not null default '{}',

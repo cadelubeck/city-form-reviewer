@@ -100,7 +100,8 @@ export async function POST(request: Request) {
   if (auth) {
     const { data } = await auth.client
       .from("engineering_documents")
-      .select("*");
+      .select("*")
+      .is("archived_at", null);
     const documents = ((data ?? []) as EngineeringDocument[]).filter((document) =>
       (!document.jurisdiction || document.jurisdiction.toLowerCase() === proposal.jurisdiction.toLowerCase()) &&
       (!document.client_id || document.client_id === proposal.clientId)
