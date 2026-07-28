@@ -180,12 +180,30 @@ export type ProposalSection = {
   startLine: number;
   score: "green" | "yellow" | "red";
   notes: string;
+  statutes?: Array<{ id: string; title: string; url: string; relevance: string; jurisdiction: string }>;
   aiReview?: {
     score: "green" | "yellow" | "red";
     summary: string;
     concerns: string[];
     recommendations: string[];
   };
+};
+
+export type ProposalHighlight = {
+  id: string;
+  text: string;
+  note: string;
+  sectionId: string;
+  createdAt: string;
+};
+
+export type ProposalVersion = {
+  label: string;
+  original_name: string | null;
+  uploaded_at: string;
+  text_content?: string;
+  sections?: ProposalSection[];
+  extracted_requirements?: Array<Record<string, unknown>>;
 };
 
 export type Proposal = {
@@ -205,8 +223,8 @@ export type Proposal = {
   project_scope: string[];
   extracted_requirements: Array<Record<string, unknown>>;
   sections: ProposalSection[];
-  highlights: Array<Record<string, unknown>>;
-  versions: Array<Record<string, unknown>>;
+  highlights: ProposalHighlight[];
+  versions: ProposalVersion[];
   compliance_review: ReviewResult | null;
   diagram_analysis: Record<string, unknown> | null;
   created_at: string;

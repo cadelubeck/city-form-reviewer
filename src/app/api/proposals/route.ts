@@ -81,7 +81,10 @@ export async function POST(request: Request) {
         {
           label: String(form.get("versionLabel") ?? "").trim() || `v${(current.versions?.length ?? 0) + 1}`,
           original_name: current.original_name,
-          uploaded_at: current.updated_at
+          uploaded_at: current.updated_at,
+          text_content: current.text_content,
+          sections: current.sections,
+          extracted_requirements: current.extracted_requirements
         }
       ];
       const { data, error } = await auth.client.from("proposals").update({

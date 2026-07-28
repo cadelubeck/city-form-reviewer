@@ -4,7 +4,7 @@ import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import type { User } from "@supabase/supabase-js";
 import {
   AlertTriangle, BarChart3, CheckCircle2, ChevronLeft, FileSearch, Filter,
-  Plus, RefreshCw, Search, Sparkles, Trash2, Upload, UserRound
+  History, Link2, Plus, RefreshCw, Search, Sparkles, Trash2, Upload, UserRound
 } from "lucide-react";
 import { getSupabase } from "@/lib/supabase";
 import type { Proposal, ProposalPriority, ProposalSection, ProposalStatus, ReviewResult } from "@/lib/types";
@@ -76,6 +76,10 @@ export function ProposalWorkspace({ user, mode }: { user: User; mode: Mode }) {
       headers={headers}
       onBack={() => setSelected(null)}
       onUpdate={updateProposal}
+      onReplace={(proposal) => {
+        setSelected(proposal);
+        setProposals((items) => items.map((item) => item.id === proposal.id ? proposal : item));
+      }}
       onDelete={() => deleteProposal(selected.id)}
     />;
   }
@@ -168,22 +172,55 @@ function ProposalUpload({ busy, onClose, onSubmit }: {
   </div>;
 }
 
-function ProposalDetail({ proposal, user, headers, onBack, onUpdate, onDelete }: {
+function ProposalDetail({ proposal, user, headers, onBack, onUpdate, onReplace, onDelete }: {
   proposal: Proposal; user: User; headers: () => Promise<Record<string, string>>;
-  onBack: () => void; onUpdate: (patch: Partial<Proposal> & { id: string }) => Promise<void>; onDelete: () => void;
+  onBack: () => void; onUpdate: (patch: Partial<Proposal> & { id: string }) => Promise<void>;
+  onReplace: (proposal: Proposal) => void; onDelete: () => void;
 }) {
   const [sectionId, setSectionId] = useState(proposal.sections[0]?.id ?? "");
   const [busy, setBusy] = useState("");
   const [message, setMessage] = useState("");
+  const [team, setTeam] = useState<Array<{ user_id: string; full_name: string; email: string }>>([]);
+  const [versionModal, setVersionModal] = useState(false);
+  const [selectedVersion, setSelectedVersion] = useState<number | null>(null);
+  const [statute, setStatute] = useState({ title: "", url: "", relevance: "", jurisdiction: "" });
   const section = proposal.sections.find((item) => item.id === sectionId);
-  const lines = proposal.text_content.split("\n");
+  const viewedVersion = selectedVersion === null ? null : proposal.versions[selectedVersion];
+  const viewedText = viewedVersion?.text_content ?? proposal.text_content;
+  const lines = viewedText.split("\n");
   const sectionIndex = proposal.sections.findIndex((item) => item.id === sectionId);
   const sectionText = section
     ? lines.slice(section.startLine, proposal.sections[sectionIndex + 1]?.startLine ?? lines.length).join("\n")
-    : proposal.text_content;
+    : viewedText;
+
+  useEffect(() => {
+    headers().then((auth) => fetch("/api/team", { headers: auth })).then((response) => response.json())
+      .then((data) => setTeam(data.members ?? [])).catch(() => {});
+  }, [headers]);
 
   async function updateSection(patch: Partial<ProposalSection>) {
     await onUpdate({ id: proposal.id, sections: proposal.sections.map((item) => item.id === sectionId ? { ...item, ...patch } : item) });
+  }
+
+  async function addHighlight() {
+    const text = window.getSelection()?.toString().trim();
+    if (!text) return setMessage("Select text in the document first.");
+    const note = window.prompt("Add a note for this highlight (optional):", "") ?? "";
+    await onUpdate({
+      id: proposal.id,
+      highlights: [...proposal.highlights, {
+        id: crypto.randomUUID(), text, note, sectionId, createdAt: new Date().toISOString()
+      }]
+    });
+  }
+
+  async function addStatute(event: FormEvent) {
+    event.preventDefault();
+    if (!section || !statute.title.trim()) return;
+    await updateSection({
+      statutes: [...(section.statutes ?? []), { id: crypto.randomUUID(), ...statute }]
+    });
+    setStatute({ title: "", url: "", relevance: "", jurisdiction: "" });
   }
 
   async function analyzeSection() {
@@ -240,7 +277,12 @@ function ProposalDetail({ proposal, user, headers, onBack, onUpdate, onDelete }:
       <div className="detail-title"><strong>{proposal.name}</strong><small>{proposal.client} · {proposal.location}</small></div>
       <select value={proposal.priority} onChange={(e) => onUpdate({ id: proposal.id, priority: e.target.value as ProposalPriority })}><option value="">No priority</option><option value="low">Low priority</option><option value="medium">Medium priority</option><option value="high">High priority</option></select>
       <select value={proposal.status} onChange={(e) => onUpdate({ id: proposal.id, status: e.target.value as ProposalStatus })}>{statuses.map((item) => <option key={item} value={item}>{statusLabel[item]}</option>)}</select>
-      <button className="soft-button" onClick={() => onUpdate({ id: proposal.id, assigned_to_id: proposal.assigned_to_id ? null : user.id, assigned_to_name: proposal.assigned_to_id ? null : (user.user_metadata.full_name || user.email) })}><UserRound size={16} />{proposal.assigned_to_id ? "Unassign" : "Assign to me"}</button>
+      <input className="due-date" type="date" value={proposal.due_date ?? ""} onChange={(e) => onUpdate({ id: proposal.id, due_date: e.target.value || null })} aria-label="Due date" />
+      <label className="assignment-control"><UserRound size={15} /><select value={proposal.assigned_to_id ?? ""} onChange={(e) => {
+        const member = team.find((item) => item.user_id === e.target.value);
+        void onUpdate({ id: proposal.id, assigned_to_id: member?.user_id ?? null, assigned_to_name: member ? (member.full_name || member.email) : null });
+      }}><option value="">Unassigned</option>{team.map((member) => <option value={member.user_id} key={member.user_id}>{member.full_name || member.email}{member.user_id === user.id ? " (me)" : ""}</option>)}</select></label>
+      <button className="soft-button" onClick={() => setVersionModal(true)}><History size={16} />v{proposal.versions.length + 1}</button>
       <button className="delete-button" onClick={onDelete}><Trash2 size={16} /></button>
     </div>
     {message ? <p className="message">{message}</p> : null}
@@ -254,7 +296,7 @@ function ProposalDetail({ proposal, user, headers, onBack, onUpdate, onDelete }:
         <p className="eyebrow">Sections</p>
         {proposal.sections.map((item) => <button className={item.id === sectionId ? "active" : ""} key={item.id} onClick={() => setSectionId(item.id)}><span className={`score-dot ${item.score}`} />{item.title}</button>)}
       </aside>
-      <section className="document-viewer panel"><div className="panel-heading"><div><p className="eyebrow">Document</p><h2>{section?.title ?? "Proposal text"}</h2></div><span>{proposal.original_name}</span></div><pre>{sectionText || "No extractable text was returned."}</pre></section>
+      <section className="document-viewer panel"><div className="panel-heading"><div><p className="eyebrow">{viewedVersion ? `Archived ${viewedVersion.label}` : "Current document"}</p><h2>{section?.title ?? "Proposal text"}</h2></div><button className="soft-button" onClick={addHighlight}>Highlight selection</button></div><pre>{sectionText || "No extractable text was returned."}</pre></section>
       <aside className="review-sidebar panel">
         <div className="panel-heading"><div><p className="eyebrow">Engineer review</p><h2>{section?.title ?? "Select a section"}</h2></div></div>
         {section ? <>
@@ -262,12 +304,64 @@ function ProposalDetail({ proposal, user, headers, onBack, onUpdate, onDelete }:
           <label>Review notes<textarea value={section.notes} onChange={(e) => updateSection({ notes: e.target.value })} placeholder="Concerns, corrections, and engineer notes…" /></label>
           <button className="primary" onClick={analyzeSection} disabled={!!busy}><Sparkles size={17} />{busy === "section" ? "Analyzing…" : section.aiReview ? "Re-run AI section review" : "Run AI section review"}</button>
           {section.aiReview ? <div className="ai-section-result"><strong>{section.aiReview.summary}</strong>{section.aiReview.concerns.map((item) => <p key={item}>⚠ {item}</p>)}{section.aiReview.recommendations.map((item) => <p key={item}>→ {item}</p>)}</div> : null}
+          <div className="review-subsection"><strong>Highlights</strong>{proposal.highlights.filter((item) => item.sectionId === sectionId).map((item) => <article className="highlight-card" key={item.id}><q>{item.text}</q>{item.note ? <p>{item.note}</p> : null}<button onClick={() => onUpdate({ id: proposal.id, highlights: proposal.highlights.filter((entry) => entry.id !== item.id) })}>Remove</button></article>)}</div>
+          <div className="review-subsection"><strong>References and statutes</strong>{(section.statutes ?? []).map((item) => <article className="statute-card" key={item.id}><a href={item.url || undefined} target="_blank" rel="noreferrer">{item.title}</a><small>{item.jurisdiction} · {item.relevance}</small><button onClick={() => updateSection({ statutes: section.statutes?.filter((entry) => entry.id !== item.id) })}>Remove</button></article>)}
+            <form className="statute-form" onSubmit={addStatute}><input required value={statute.title} onChange={(e) => setStatute({ ...statute, title: e.target.value })} placeholder="Reference title" /><input value={statute.url} onChange={(e) => setStatute({ ...statute, url: e.target.value })} placeholder="Source URL" /><div className="inline-fields"><input value={statute.jurisdiction} onChange={(e) => setStatute({ ...statute, jurisdiction: e.target.value })} placeholder="Jurisdiction" /><input value={statute.relevance} onChange={(e) => setStatute({ ...statute, relevance: e.target.value })} placeholder="Relevance" /></div><button className="soft-button"><Link2 size={15} />Add reference</button></form>
+          </div>
         </> : null}
       </aside>
     </div>
     {proposal.compliance_review ? <ComplianceResults result={proposal.compliance_review} /> : null}
     {proposal.diagram_analysis ? <AnalysisPanel analysis={proposal.diagram_analysis} /> : null}
+    {versionModal ? <VersionModal proposal={proposal} headers={headers} busy={busy} onBusy={setBusy} onClose={() => setVersionModal(false)} onSelect={(index) => { setSelectedVersion(index); setVersionModal(false); }} onUpdated={(updated) => { onReplace(updated); setSelectedVersion(null); setVersionModal(false); }} /> : null}
   </section>;
+}
+
+function VersionModal({ proposal, headers, busy, onBusy, onClose, onSelect, onUpdated }: {
+  proposal: Proposal;
+  headers: () => Promise<Record<string, string>>;
+  busy: string;
+  onBusy: (value: string) => void;
+  onClose: () => void;
+  onSelect: (index: number | null) => void;
+  onUpdated: (proposal: Proposal) => void;
+}) {
+  const [file, setFile] = useState<File | null>(null);
+  const [label, setLabel] = useState("");
+  const [error, setError] = useState("");
+  async function upload() {
+    if (!file) return;
+    onBusy("version"); setError("");
+    const body = new FormData();
+    body.append("proposalId", proposal.id);
+    body.append("name", proposal.name);
+    body.append("client", proposal.client);
+    body.append("location", proposal.location);
+    body.append("versionLabel", label);
+    body.append("file", file);
+    const response = await fetch("/api/proposals", { method: "POST", headers: await headers(), body });
+    const data = await response.json();
+    onBusy("");
+    if (!response.ok) return setError(data.error ?? "Version upload failed.");
+    onUpdated(data as Proposal);
+  }
+  return <div className="modal-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
+    <section className="modal-card">
+      <div className="panel-heading"><div><p className="eyebrow">Document control</p><h2>Version history</h2></div><button className="modal-close" onClick={onClose}>×</button></div>
+      <button className="version-row current" onClick={() => onSelect(null)}><span className="document-icon">📄</span><span><strong>v{proposal.versions.length + 1} · Current</strong><small>{proposal.original_name}</small></span></button>
+      {[...proposal.versions].reverse().map((version, reverseIndex) => {
+        const index = proposal.versions.length - 1 - reverseIndex;
+        return <button className="version-row" key={`${version.label}-${index}`} onClick={() => onSelect(index)}><span className="document-icon">📄</span><span><strong>{version.label}</strong><small>{version.original_name} · {new Date(version.uploaded_at).toLocaleString()}</small></span></button>;
+      })}
+      <div className="version-upload form">
+        <p className="eyebrow">Upload replacement</p>
+        <input value={label} onChange={(event) => setLabel(event.target.value)} placeholder={`Version label, e.g. v${proposal.versions.length + 2}`} />
+        <label className="file-drop"><input type="file" accept=".pdf,.txt,application/pdf,text/plain" onChange={(event) => setFile(event.target.files?.[0] ?? null)} /><Upload size={20} /><strong>{file?.name ?? "Choose revised PDF or TXT"}</strong></label>
+        {error ? <p className="message">{error}</p> : null}
+        <button className="primary" disabled={!file || busy === "version"} onClick={upload}>{busy === "version" ? "Extracting revision…" : "Upload new version"}</button>
+      </div>
+    </section>
+  </div>;
 }
 
 function ComplianceResults({ result }: { result: ReviewResult }) {
@@ -284,11 +378,13 @@ function AnalysisPanel({ analysis }: { analysis: Record<string, unknown> }) {
 
 function ProposalDashboard({ proposals, onOpen, onRefresh }: { proposals: Proposal[]; onOpen: (proposal: Proposal) => void; onRefresh: () => void }) {
   const locationCounts = Object.entries(Object.groupBy(proposals, (item) => item.location || "No location")).map(([name, items]) => [name, items?.length ?? 0] as const).sort((a, b) => b[1] - a[1]);
+  const reviewerCounts = Object.entries(Object.groupBy(proposals, (item) => item.assigned_to_name || "Unassigned"));
   return <section className="dashboard-view">
     <div className="dashboard-heading"><div><p className="eyebrow">Proposal overview</p><h2>Manager dashboard</h2></div><button className="soft-button" onClick={onRefresh}><RefreshCw size={16} />Refresh</button></div>
     <div className="status-grid"><div className="metric"><span>Total proposals</span><strong>{proposals.length}</strong></div>{statuses.map((item) => <div className={`metric status-metric ${item}`} key={item}><span>{statusLabel[item]}</span><strong>{proposals.filter((proposal) => proposal.status === item).length}</strong></div>)}</div>
     <div className="dashboard-grid"><section className="panel"><div className="panel-heading"><h2>By location</h2><BarChart3 size={19} /></div>{locationCounts.map(([name, count]) => <div className="location-bar" key={name}><span>{name}</span><div><i style={{ width: `${proposals.length ? count / proposals.length * 100 : 0}%` }} /></div><strong>{count}</strong></div>)}</section>
     <section className="panel"><div className="panel-heading"><h2>Needs attention</h2><AlertTriangle size={19} /></div>{proposals.filter((item) => item.status === "needs_updates" || item.priority === "high").map((item) => <button className="proposal-row" key={item.id} onClick={() => onOpen(item)}><span className="document-icon">📄</span><span className="proposal-copy"><strong>{item.name}</strong><small>{item.location}</small></span><span className={`proposal-status ${item.status}`}>{statusLabel[item.status]}</span></button>)}</section></div>
+    <section className="panel reviewer-workload"><div className="panel-heading"><h2>Reviewer workload</h2><UserRound size={19} /></div><div className="usage-table-wrap"><table className="usage-table"><thead><tr><th>Reviewer</th><th>Total</th>{statuses.map((item) => <th key={item}>{statusLabel[item]}</th>)}</tr></thead><tbody>{reviewerCounts.map(([name, items]) => <tr key={name}><td><strong>{name}</strong></td><td>{items?.length ?? 0}</td>{statuses.map((status) => <td key={status}>{items?.filter((item) => item.status === status).length ?? 0}</td>)}</tr>)}</tbody></table></div></section>
     <section className="panel"><div className="panel-heading"><h2>Recent activity</h2></div>{proposals.slice(0, 10).map((item) => <button className="proposal-row" key={item.id} onClick={() => onOpen(item)}><span className="document-icon">📄</span><span className="proposal-copy"><strong>{item.name}</strong><small>{item.client} · {item.location}</small></span><span>{new Date(item.updated_at).toLocaleDateString()}</span></button>)}</section>
   </section>;
 }

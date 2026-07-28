@@ -40,6 +40,9 @@ stricter than the city baseline.
    workflow, section reviews, version metadata, dashboards, and saved compliance
    results.
 
+   Run `supabase/team.sql` to enable reviewer assignment lists, company profiles,
+   team members, and invitation tracking.
+
 4. Copy `.env.example` to `.env.local` and add:
 
    ```bash

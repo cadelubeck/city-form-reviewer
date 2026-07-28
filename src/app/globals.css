@@ -1084,6 +1084,29 @@ button:disabled {
   color: #fff;
 }
 
+.detail-toolbar .due-date {
+  width: 138px;
+  min-height: 38px;
+  border-color: rgba(255,255,255,.12);
+  background: #1e293b;
+  color: #fff;
+}
+
+.reviewer-workload {
+  margin-bottom: 16px;
+}
+
+.assignment-control {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: #94a3b8;
+}
+
+.assignment-control select {
+  max-width: 150px;
+}
+
 .detail-title {
   display: grid;
   flex: 1;
@@ -1177,6 +1200,153 @@ button:disabled {
   margin: 0;
 }
 
+.review-subsection {
+  display: grid;
+  gap: 8px;
+  border-top: 1px solid #e2e8f0;
+  padding-top: 13px;
+  font-size: .76rem;
+}
+
+.highlight-card,
+.statute-card {
+  position: relative;
+  display: grid;
+  gap: 5px;
+  padding: 10px;
+  border-radius: 8px;
+}
+
+.highlight-card {
+  border: 1px solid #fde68a;
+  background: #fffbeb;
+}
+
+.highlight-card q {
+  color: #92400e;
+  font-style: italic;
+}
+
+.highlight-card p,
+.statute-card small {
+  margin: 0;
+  color: #64748b;
+}
+
+.highlight-card button,
+.statute-card button {
+  min-height: 24px;
+  justify-self: start;
+  padding: 0;
+  background: transparent;
+  color: #dc2626;
+  font-size: .68rem;
+}
+
+.statute-card {
+  border: 1px solid #dbeafe;
+  background: #eff6ff;
+}
+
+.statute-card a {
+  color: #1d4ed8;
+  font-weight: 800;
+}
+
+.statute-form {
+  display: grid;
+  gap: 7px;
+}
+
+.statute-form input {
+  min-height: 36px;
+  font-size: .74rem;
+}
+
+.version-row {
+  width: 100%;
+  justify-content: flex-start;
+  gap: 10px;
+  margin-bottom: 7px;
+  padding: 10px;
+  border: 1px solid #e2e8f0;
+  background: #fff;
+  text-align: left;
+}
+
+.version-row.current {
+  border-color: #a5b4fc;
+  background: #eef2ff;
+}
+
+.version-row > span:last-child {
+  display: grid;
+  gap: 3px;
+}
+
+.version-row small {
+  color: #64748b;
+}
+
+.version-upload {
+  margin-top: 18px;
+  border-top: 1px solid #e2e8f0;
+  padding-top: 18px;
+}
+
+.team-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 18px;
+}
+
+.inline-action {
+  display: flex;
+  gap: 8px;
+}
+
+.team-list,
+.invite-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.team-member {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px;
+  border: 1px solid #edf1f5;
+  border-radius: 9px;
+}
+
+.profile-avatar.small {
+  width: 36px;
+  height: 36px;
+  font-size: .82rem;
+}
+
+.team-member > span:last-child {
+  display: grid;
+  gap: 2px;
+}
+
+.team-member small,
+.invite-list span {
+  color: #64748b;
+  font-size: .72rem;
+}
+
+.invite-list p {
+  display: flex;
+  justify-content: space-between;
+  margin: 0;
+  padding: 8px 0;
+  border-bottom: 1px solid #f1f5f9;
+  font-size: .76rem;
+}
+
 .compliance-results,
 .analysis-panel {
   margin-top: 16px;
@@ -1262,7 +1432,8 @@ button:disabled {
   }
   .viewer-grid,
   .dashboard-grid,
-  .status-grid {
+  .status-grid,
+  .team-grid {
     grid-template-columns: 1fr;
   }
   .review-sidebar {

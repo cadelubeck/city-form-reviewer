@@ -1228,6 +1228,7 @@ function ProfileView({ user, events }: { user: User; events: UsageEvent[] }) {
         <Metric label="Last 30 days" value={recentCount(30).toString()} />
         <Metric label="Request errors" value={errors.toString()} tone={errors ? "bad" : "good"} />
       </div>
+      <TeamPanel user={user} />
       <section className="panel">
         <div className="panel-heading">
           <div>
@@ -1260,4 +1261,73 @@ function ProfileView({ user, events }: { user: User; events: UsageEvent[] }) {
       </section>
     </section>
   );
+}
+
+function TeamPanel({ user }: { user: User }) {
+  const supabase = useMemo(() => getSupabase(), []);
+  const [members, setMembers] = useState<Array<{ user_id: string; full_name: string; email: string; role: string; company_name: string }>>([]);
+  const [invites, setInvites] = useState<Array<{ id: string; email: string; status: string; created_at: string }>>([]);
+  const [inviteEmail, setInviteEmail] = useState("");
+  const [companyName, setCompanyName] = useState("");
+  const [notice, setNotice] = useState("");
+
+  async function teamHeaders(): Promise<Record<string, string>> {
+    const token = (await supabase?.auth.getSession())?.data.session?.access_token;
+    return token ? { Authorization: `Bearer ${token}` } : {};
+  }
+
+  async function loadTeam() {
+    const response = await fetch("/api/team", { headers: await teamHeaders() });
+    const data = await response.json();
+    if (!response.ok) return setNotice(data.error ?? "Unable to load team.");
+    setMembers(data.members ?? []);
+    setInvites(data.invites ?? []);
+    const me = data.members?.find((member: { user_id: string }) => member.user_id === user.id);
+    if (me?.company_name) setCompanyName(me.company_name);
+  }
+
+  useEffect(() => { void loadTeam(); }, []);
+
+  async function invite(event: FormEvent) {
+    event.preventDefault();
+    const response = await fetch("/api/team", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...(await teamHeaders()) },
+      body: JSON.stringify({ email: inviteEmail })
+    });
+    const data = await response.json();
+    if (!response.ok) return setNotice(data.error ?? "Invite failed.");
+    setInviteEmail(""); setNotice(`Invitation recorded for ${data.email}.`); await loadTeam();
+  }
+
+  async function saveCompany() {
+    const response = await fetch("/api/team", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...(await teamHeaders()) },
+      body: JSON.stringify({
+        action: "profile",
+        fullName: user.user_metadata.full_name || "",
+        companyName,
+        role: members.find((member) => member.user_id === user.id)?.role ?? "reviewer"
+      })
+    });
+    const data = await response.json();
+    if (!response.ok) return setNotice(data.error ?? "Profile update failed.");
+    setNotice("Company profile saved."); await loadTeam();
+  }
+
+  return <section className="team-grid">
+    <div className="panel">
+      <div className="panel-heading"><div><p className="eyebrow">Organization</p><h2>Company and team</h2></div><UserCircle size={20} /></div>
+      {notice ? <p className="message">{notice}</p> : null}
+      <label>Company name<div className="inline-action"><input value={companyName} onChange={(event) => setCompanyName(event.target.value)} placeholder="Your engineering organization" /><button className="soft-button" onClick={saveCompany}>Save</button></div></label>
+      <div className="team-list">{members.map((member) => <div className="team-member" key={member.user_id}><span className="profile-avatar small">{(member.full_name || member.email).charAt(0).toUpperCase()}</span><span><strong>{member.full_name || member.email}</strong><small>{member.email} · {member.role}</small></span></div>)}</div>
+    </div>
+    <form className="panel form" onSubmit={invite}>
+      <div className="panel-heading"><div><p className="eyebrow">Collaboration</p><h2>Invite a reviewer</h2></div><Plus size={20} /></div>
+      <label>Email address<input required type="email" value={inviteEmail} onChange={(event) => setInviteEmail(event.target.value)} placeholder="reviewer@company.com" /></label>
+      <button className="primary">Create invitation</button>
+      <div className="invite-list">{invites.map((item) => <p key={item.id}><strong>{item.email}</strong><span>{item.status} · {new Date(item.created_at).toLocaleDateString()}</span></p>)}</div>
+    </form>
+  </section>;
 }
