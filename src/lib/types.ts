@@ -170,3 +170,45 @@ export interface ReviewResult {
   nextActions: string[];
   sourcesUsed: SourceRegistryItem[];
 }
+
+export type ProposalStatus = "pending" | "in_review" | "needs_updates" | "accepted" | "rejected";
+export type ProposalPriority = "" | "low" | "medium" | "high";
+
+export type ProposalSection = {
+  id: string;
+  title: string;
+  startLine: number;
+  score: "green" | "yellow" | "red";
+  notes: string;
+  aiReview?: {
+    score: "green" | "yellow" | "red";
+    summary: string;
+    concerns: string[];
+    recommendations: string[];
+  };
+};
+
+export type Proposal = {
+  id: string;
+  user_id: string;
+  name: string;
+  client: string;
+  location: string;
+  status: ProposalStatus;
+  priority: ProposalPriority;
+  assigned_to_id: string | null;
+  assigned_to_name: string | null;
+  due_date: string | null;
+  original_name: string | null;
+  text_content: string;
+  detected_jurisdiction: Record<string, unknown>;
+  project_scope: string[];
+  extracted_requirements: Array<Record<string, unknown>>;
+  sections: ProposalSection[];
+  highlights: Array<Record<string, unknown>>;
+  versions: Array<Record<string, unknown>>;
+  compliance_review: ReviewResult | null;
+  diagram_analysis: Record<string, unknown> | null;
+  created_at: string;
+  updated_at: string;
+};

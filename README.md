@@ -36,6 +36,10 @@ stricter than the city baseline.
    standards and site-document library. This migration creates the document
    metadata/requirement store, indexes, and row-level security policies.
 
+   Run `supabase/proposals.sql` to enable the full proposal queue, assignment
+   workflow, section reviews, version metadata, dashboards, and saved compliance
+   results.
+
 4. Copy `.env.example` to `.env.local` and add:
 
    ```bash

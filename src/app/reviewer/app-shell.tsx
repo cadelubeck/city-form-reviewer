@@ -3,6 +3,7 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import {
   AlertTriangle,
+  BarChart3,
   BookOpen,
   CheckCircle2,
   CircleDot,
@@ -10,6 +11,7 @@ import {
   Globe2,
   Lock,
   LogOut,
+  ClipboardList,
   Plus,
   UserCircle,
   Save,
@@ -18,6 +20,7 @@ import {
   Trash2,
   Upload
 } from "lucide-react";
+import { ProposalWorkspace } from "./proposal-workspace";
 import type { User } from "@supabase/supabase-js";
 import { getSupabase } from "@/lib/supabase";
 import type {
@@ -114,7 +117,7 @@ export function AppShell() {
   const [message, setMessage] = useState("");
   const [isBusy, setIsBusy] = useState(false);
   const [isReviewing, setIsReviewing] = useState(false);
-  const [activeView, setActiveView] = useState<"reviewer" | "documents" | "profile">("reviewer");
+  const [activeView, setActiveView] = useState<"proposals" | "my-work" | "dashboard" | "reviewer" | "documents" | "profile">("proposals");
   const [usageEvents, setUsageEvents] = useState<UsageEvent[]>([]);
   const [documents, setDocuments] = useState<EngineeringDocument[]>([]);
   const [documentFile, setDocumentFile] = useState<File | null>(null);
@@ -292,7 +295,7 @@ export function AppShell() {
     setReviewResult(null);
     setAiNarrative(null);
     setMessage("Signed out.");
-    setActiveView("reviewer");
+    setActiveView("proposals");
   }
 
   function updateScope(tag: string) {
@@ -567,11 +570,20 @@ export function AppShell() {
             </div>
           </div>
           <div className="topbar-actions">
+            <button className={`nav-button ${activeView === "proposals" ? "active" : ""}`} onClick={() => setActiveView("proposals")}>
+              <ClipboardList size={18} /><span>Proposals</span>
+            </button>
+            <button className={`nav-button ${activeView === "my-work" ? "active" : ""}`} onClick={() => setActiveView("my-work")}>
+              <UserCircle size={18} /><span>My work</span>
+            </button>
             <button className={`nav-button ${activeView === "reviewer" ? "active" : ""}`} onClick={() => setActiveView("reviewer")}>
-              <SearchCheck size={18} /><span>Reviews</span>
+              <SearchCheck size={18} /><span>Quick review</span>
             </button>
             <button className={`nav-button ${activeView === "documents" ? "active" : ""}`} onClick={() => setActiveView("documents")}>
               <BookOpen size={18} /><span>Standards library</span>
+            </button>
+            <button className={`nav-button ${activeView === "dashboard" ? "active" : ""}`} onClick={() => setActiveView("dashboard")}>
+              <BarChart3 size={18} /><span>Dashboard</span>
             </button>
             <button
               className={`nav-button ${activeView === "profile" ? "active" : ""}`}
@@ -589,7 +601,9 @@ export function AppShell() {
           </div>
         </header>
 
-        {activeView === "profile" ? (
+        {activeView === "proposals" || activeView === "my-work" || activeView === "dashboard" ? (
+          <ProposalWorkspace user={user} mode={activeView} />
+        ) : activeView === "profile" ? (
           <ProfileView user={user} events={usageEvents} />
         ) : activeView === "documents" ? (
           <DocumentLibrary
