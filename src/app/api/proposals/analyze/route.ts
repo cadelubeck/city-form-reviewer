@@ -145,6 +145,7 @@ export async function POST(request: Request) {
         schema: deepReviewSchema,
         reasoningEffort: "high",
         maxOutputTokens: 16000,
+        timeoutMs: 180_000,
         instructions: `You are an AI civil proposal review assistant, not the approving engineer.
 Inspect every page in order, including every visible word, note, table, callout, plan, profile,
 detail, section, schedule, symbol, dimension, legend, stamp, and diagram. Return one page record

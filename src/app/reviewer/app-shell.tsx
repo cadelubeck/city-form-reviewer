@@ -23,6 +23,7 @@ import {
 import { ProposalWorkspace } from "./proposal-workspace";
 import type { User } from "@supabase/supabase-js";
 import { getSupabase } from "@/lib/supabase";
+import { apiFetch } from "@/lib/api-fetch";
 import type {
   Review,
   ReviewResult,
@@ -217,7 +218,7 @@ export function AppShell() {
   }
 
   async function loadDocuments() {
-    const response = await fetch("/api/documents", { headers: await authHeaders() });
+    const response = await apiFetch("/api/documents", { headers: await authHeaders() });
     const data = await response.json();
     if (!response.ok) return setMessage(data.error ?? "Unable to load documents.");
     setDocuments(data as EngineeringDocument[]);
@@ -231,19 +232,26 @@ export function AppShell() {
     const body = new FormData();
     Object.entries(documentForm).forEach(([key, value]) => body.append(key, value));
     if (documentFile) body.append("file", documentFile);
-    const response = await fetch("/api/documents", { method: "POST", headers: await authHeaders(), body });
-    const data = await response.json();
-    setDocumentBusy(false);
-    if (!response.ok) return setMessage(data.error ?? "Document extraction failed.");
-    setDocumentFile(null);
-    setDocumentForm((current) => ({ ...current, title: "", effectiveDate: "", sourceUrl: "", text: "" }));
-    setMessage(`Extracted ${data.requirements?.length ?? 0} requirements from ${data.title}.`);
-    await loadDocuments();
+    try {
+      const response = await apiFetch("/api/documents", { method: "POST", headers: await authHeaders(), body }, 120_000);
+      const data = await response.json();
+      if (!response.ok) return setMessage(data.error ?? "Document extraction failed.");
+      setDocumentFile(null);
+      setDocumentForm((current) => ({ ...current, title: "", effectiveDate: "", sourceUrl: "", text: "" }));
+      setMessage(`Extracted ${data.requirements?.length ?? 0} requirements from ${data.title}.`);
+      await loadDocuments();
+    } catch (error) {
+      setMessage(error instanceof Error && error.name === "TimeoutError"
+        ? "Document extraction timed out after two minutes. Please retry."
+        : error instanceof Error ? error.message : "Document extraction failed.");
+    } finally {
+      setDocumentBusy(false);
+    }
   }
 
   async function deleteDocument(id: string) {
     if (!confirm("Remove this source from the compliance library?")) return;
-    const response = await fetch(`/api/documents/${id}`, { method: "DELETE", headers: await authHeaders() });
+    const response = await apiFetch(`/api/documents/${id}`, { method: "DELETE", headers: await authHeaders() });
     if (!response.ok) return setMessage("Unable to remove document.");
     await loadDocuments();
   }
@@ -383,25 +391,26 @@ export function AppShell() {
     setAiNarrative(null);
 
     const startedAt = Date.now();
-    const accessToken = supabase
-      ? (await supabase.auth.getSession()).data.session?.access_token
-      : null;
-    const response = await fetch("/api/reviews", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {})
-      },
-      body: JSON.stringify({
-        proposal: {
-          projectName: form.projectName || form.applicant || "Untitled project",
-          clientId: form.clientId,
-          jurisdiction: form.city,
-          address: form.address || "Address not provided",
-          scopeTags: form.scopeTags,
-          proposalText: form.proposalText,
-          uploadedFiles: form.uploadedFiles,
-          measurements: [
+    try {
+      const accessToken = supabase
+        ? (await supabase.auth.getSession()).data.session?.access_token
+        : null;
+      const response = await apiFetch("/api/reviews", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {})
+        },
+        body: JSON.stringify({
+          proposal: {
+            projectName: form.projectName || form.applicant || "Untitled project",
+            clientId: form.clientId,
+            jurisdiction: form.city,
+            address: form.address || "Address not provided",
+            scopeTags: form.scopeTags,
+            proposalText: form.proposalText,
+            uploadedFiles: form.uploadedFiles,
+            measurements: [
             {
               metric: "aggregate_base_depth",
               value: numberOrNull(form.aggregateBaseDepth),
@@ -430,44 +439,49 @@ export function AppShell() {
               value: form.seismicDesignCategory,
               citation: "Proposal structural criteria"
             }
-          ]
-        },
-        siteFindings: buildSiteFindings(),
-        siteDocumentText: form.geotechText
-      })
-    });
+            ]
+          },
+          siteFindings: buildSiteFindings(),
+          siteDocumentText: form.geotechText
+        })
+      }, 120_000);
 
-    const data = (await response.json()) as ReviewApiResponse;
-    if (user) {
-      await logUsage(user.id, "api_request", {
-        endpoint: "/api/reviews",
-        method: "POST",
-        statusCode: response.status,
-        durationMs: Date.now() - startedAt,
-        details: { aiRequested: true }
-      });
-    }
-    if (!response.ok || !data.ok || !data.review) {
-      setMessage(data.message ?? "The review API could not complete the review.");
+      const data = (await response.json()) as ReviewApiResponse;
+      if (user) {
+        await logUsage(user.id, "api_request", {
+          endpoint: "/api/reviews",
+          method: "POST",
+          statusCode: response.status,
+          durationMs: Date.now() - startedAt,
+          details: { aiRequested: true }
+        });
+      }
+      if (!response.ok || !data.ok || !data.review) {
+        setMessage(data.message ?? "The review API could not complete the review.");
+        return;
+      }
+
+      setReviewResult(data.review);
+      setAiNarrative(data.aiNarrative ?? null);
+      setExtraction(data.extraction);
+      setForm((current) => ({
+        ...current,
+        notes: [
+          data.aiNarrative,
+          ...data.review!.nextActions,
+          `Pass: ${data.review!.summary.pass}, fail: ${data.review!.summary.fail}, missing: ${data.review!.summary.missing}`
+        ]
+          .filter(Boolean)
+          .join("\n")
+      }));
+      setMessage("Standards review complete.");
+    } catch (error) {
+      setMessage(error instanceof Error && error.name === "TimeoutError"
+        ? "The review service did not respond within two minutes. Your form remains available to retry."
+        : error instanceof Error ? error.message : "The review API could not complete the review.");
+    } finally {
       setIsReviewing(false);
-      return;
     }
-
-    setReviewResult(data.review);
-    setAiNarrative(data.aiNarrative ?? null);
-    setExtraction(data.extraction);
-    setForm((current) => ({
-      ...current,
-      notes: [
-        data.aiNarrative,
-        ...data.review!.nextActions,
-        `Pass: ${data.review!.summary.pass}, fail: ${data.review!.summary.fail}, missing: ${data.review!.summary.missing}`
-      ]
-        .filter(Boolean)
-        .join("\n")
-    }));
-    setMessage("Standards review complete.");
-    setIsReviewing(false);
   }
 
   async function saveReview(event: FormEvent<HTMLFormElement>) {
@@ -1279,7 +1293,7 @@ function TeamPanel({ user }: { user: User }) {
   }
 
   async function loadTeam() {
-    const response = await fetch("/api/team", { headers: await teamHeaders() });
+    const response = await apiFetch("/api/team", { headers: await teamHeaders() });
     const data = await response.json();
     if (!response.ok) return setNotice(data.error ?? "Unable to load team.");
     setMembers(data.members ?? []);
@@ -1292,7 +1306,7 @@ function TeamPanel({ user }: { user: User }) {
 
   async function invite(event: FormEvent) {
     event.preventDefault();
-    const response = await fetch("/api/team", {
+    const response = await apiFetch("/api/team", {
       method: "POST",
       headers: { "Content-Type": "application/json", ...(await teamHeaders()) },
       body: JSON.stringify({ email: inviteEmail })
@@ -1303,7 +1317,7 @@ function TeamPanel({ user }: { user: User }) {
   }
 
   async function saveCompany() {
-    const response = await fetch("/api/team", {
+    const response = await apiFetch("/api/team", {
       method: "POST",
       headers: { "Content-Type": "application/json", ...(await teamHeaders()) },
       body: JSON.stringify({

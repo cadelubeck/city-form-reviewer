@@ -7,6 +7,7 @@ import {
   History, Link2, Plus, RefreshCw, Search, Sparkles, Trash2, Upload, UserRound
 } from "lucide-react";
 import { getSupabase } from "@/lib/supabase";
+import { apiFetch } from "@/lib/api-fetch";
 import type { PageReviewFinding, Proposal, ProposalPriority, ProposalSection, ProposalStatus, ReviewResult } from "@/lib/types";
 
 type Mode = "proposals" | "my-work" | "dashboard";
@@ -33,17 +34,23 @@ export function ProposalWorkspace({ user, mode }: { user: User; mode: Mode }) {
   }, [supabase]);
 
   const load = useCallback(async () => {
-    const response = await fetch("/api/proposals", { headers: await headers() });
-    const data = await response.json();
-    if (!response.ok) return setMessage(data.error ?? "Unable to load proposals.");
-    setProposals(data as Proposal[]);
-    if (selected) setSelected((data as Proposal[]).find((item) => item.id === selected.id) ?? null);
+    try {
+      const response = await apiFetch("/api/proposals", { headers: await headers() });
+      const data = await response.json();
+      if (!response.ok) return setMessage(data.error ?? "Unable to load proposals.");
+      setProposals(data as Proposal[]);
+      if (selected) setSelected((data as Proposal[]).find((item) => item.id === selected.id) ?? null);
+    } catch (error) {
+      setMessage(error instanceof Error && error.name === "TimeoutError"
+        ? "The proposal service did not respond within 25 seconds."
+        : "Unable to load proposals.");
+    }
   }, [headers, selected?.id]);
 
   useEffect(() => { void load(); }, [load]);
 
   async function updateProposal(patch: Partial<Proposal> & { id: string }) {
-    const response = await fetch("/api/proposals", {
+    const response = await apiFetch("/api/proposals", {
       method: "PATCH",
       headers: { "Content-Type": "application/json", ...(await headers()) },
       body: JSON.stringify(patch)
@@ -56,7 +63,7 @@ export function ProposalWorkspace({ user, mode }: { user: User; mode: Mode }) {
 
   async function deleteProposal(id: string) {
     if (!confirm("Archive this proposal? Its files, status, reviews, and history will be retained.")) return;
-    const response = await fetch(`/api/proposals?id=${id}`, { method: "DELETE", headers: await headers() });
+    const response = await apiFetch(`/api/proposals?id=${id}`, { method: "DELETE", headers: await headers() });
     if (!response.ok) return setMessage("Unable to archive proposal.");
     setSelected(null);
     setMessage("Proposal archived. The complete record remains available under Archived records.");
@@ -140,10 +147,10 @@ export function ProposalWorkspace({ user, mode }: { user: User; mode: Mode }) {
         onSubmit={async (form) => {
           setBusy(true); setMessage("");
           try {
-            const response = await fetch("/api/proposals", {
+            const response = await apiFetch("/api/proposals", {
               method: "POST", headers: await headers(), body: form,
               signal: AbortSignal.timeout(290_000)
-            });
+            }, 120_000);
             const data = await response.json().catch(() => ({ error: `Upload failed with status ${response.status}.` }));
             if (!response.ok) return setMessage(data.error ?? "Upload failed.");
             setShowUpload(false); setSelected(data as Proposal); await load();
@@ -213,7 +220,7 @@ function ProposalDetail({ proposal, user, headers, onBack, onUpdate, onReplace, 
   const pageReview = proposal.page_reviews?.find((item) => item.page === activePage);
 
   useEffect(() => {
-    headers().then((auth) => fetch("/api/team", { headers: auth })).then((response) => response.json())
+    headers().then((auth) => apiFetch("/api/team", { headers: auth })).then((response) => response.json())
       .then((data) => setTeam(data.members ?? [])).catch(() => {});
   }, [headers]);
 
@@ -246,11 +253,11 @@ function ProposalDetail({ proposal, user, headers, onBack, onUpdate, onReplace, 
     if (!section) return;
     setBusy("section"); setMessage("");
     try {
-      const response = await fetch("/api/proposals/analyze", {
+      const response = await apiFetch("/api/proposals/analyze", {
         method: "POST", headers: { "Content-Type": "application/json", ...(await headers()) },
         body: JSON.stringify({ mode: "section", projectName: proposal.name, sectionTitle: section.title, text: sectionText }),
         signal: AbortSignal.timeout(290_000)
-      });
+      }, 120_000);
       const data = await response.json().catch(() => ({ error: "The AI response could not be read." }));
       if (!response.ok) return setMessage(data.error ?? "AI review failed.");
       await updateSection({ score: data.data.score, aiReview: data.data });
@@ -264,11 +271,11 @@ function ProposalDetail({ proposal, user, headers, onBack, onUpdate, onReplace, 
   async function runDeepReview() {
     setBusy("deep"); setMessage("The AI is reviewing every page, word, table, and diagram. This may take several minutes.");
     try {
-      const response = await fetch("/api/proposals/analyze", {
+      const response = await apiFetch("/api/proposals/analyze", {
         method: "POST", headers: { "Content-Type": "application/json", ...(await headers()) },
         body: JSON.stringify({ mode: "deep", proposalId: proposal.id }),
         signal: AbortSignal.timeout(290_000)
-      });
+      }, 200_000);
       const data = await response.json().catch(() => ({ error: "The AI response could not be read." }));
       if (!response.ok) return setMessage(data.error ?? "Deep document review failed.");
       const pages = data.data.pages ?? [];
@@ -287,7 +294,7 @@ function ProposalDetail({ proposal, user, headers, onBack, onUpdate, onReplace, 
   async function runCompliance() {
     setBusy("compliance"); setMessage("");
     try {
-      const response = await fetch("/api/reviews", {
+      const response = await apiFetch("/api/reviews", {
       method: "POST", headers: { "Content-Type": "application/json", ...(await headers()) },
       body: JSON.stringify({
         proposal: {
@@ -305,7 +312,7 @@ function ProposalDetail({ proposal, user, headers, onBack, onUpdate, onReplace, 
         siteFindings: []
       }),
       signal: AbortSignal.timeout(290_000)
-      });
+      }, 120_000);
       const data = await response.json().catch(() => ({ message: "The review response could not be read." }));
       if (!response.ok || !data.review) return setMessage(data.message ?? "Compliance review failed.");
       await onUpdate({ id: proposal.id, compliance_review: data.review });
@@ -417,7 +424,7 @@ function VersionModal({ proposal, headers, busy, onBusy, onClose, onSelect, onUp
     body.append("location", proposal.location);
     body.append("versionLabel", label);
     body.append("file", file);
-    const response = await fetch("/api/proposals", { method: "POST", headers: await headers(), body });
+    const response = await apiFetch("/api/proposals", { method: "POST", headers: await headers(), body }, 120_000);
     const data = await response.json();
     onBusy("");
     if (!response.ok) return setError(data.error ?? "Version upload failed.");
