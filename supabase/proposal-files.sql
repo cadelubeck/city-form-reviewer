@@ -11,7 +11,7 @@ values (
   'proposal-files',
   'proposal-files',
   false,
-  50000000,
+  52428800,
   array['application/pdf', 'text/plain']
 )
 on conflict (id) do update set

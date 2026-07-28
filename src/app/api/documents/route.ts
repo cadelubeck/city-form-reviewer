@@ -19,7 +19,7 @@ async function loadStoredFile(
   if (!filePath.startsWith(`${companyId}/standards/`)) throw new Error("The uploaded standard file path is invalid.");
   const { data, error } = await client.storage.from("proposal-files").download(filePath);
   if (error || !data) throw new Error(error?.message ?? "The uploaded standard could not be loaded.");
-  if (data.size > 50_000_000) throw new Error("Document exceeds the 50 MB extraction limit.");
+  if (data.size > 50 * 1024 * 1024) throw new Error("Document exceeds the 50 MiB extraction limit.");
   return {
     file: data,
     filePath,

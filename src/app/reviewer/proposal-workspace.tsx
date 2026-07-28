@@ -35,7 +35,12 @@ async function uploadProposalFile(
   const { error } = await supabase.storage
     .from("proposal-files")
     .uploadToSignedUrl(ticket.path, ticket.token, file, { contentType: file.type });
-  if (error) throw new Error(`Private file upload failed: ${error.message}`);
+  if (error) {
+    const message = error.message.toLowerCase().includes("maximum allowed size")
+      ? "Supabase Storage is still using its old bucket limit. Update the proposal-files bucket to 52,428,800 bytes, then retry."
+      : `Private file upload failed: ${error.message}`;
+    throw new Error(message);
+  }
   form.delete("file");
   form.set("filePath", ticket.path);
   form.set("originalName", file.name);

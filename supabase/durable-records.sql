@@ -156,7 +156,7 @@ create index if not exists engineering_documents_company_updated_idx
 on public.engineering_documents (company_id, updated_at desc);
 
 insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
-values ('proposal-files', 'proposal-files', false, 50000000, array['application/pdf', 'text/plain'])
+values ('proposal-files', 'proposal-files', false, 52428800, array['application/pdf', 'text/plain'])
 on conflict (id) do update set
   public = excluded.public,
   file_size_limit = excluded.file_size_limit,

@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { authenticatedSupabase } from "@/lib/server-supabase";
 
-const MAX_FILE_SIZE = 50_000_000;
+const MAX_FILE_SIZE = 50 * 1024 * 1024;
 const ALLOWED_TYPES = new Set(["application/pdf", "text/plain"]);
 
 export async function POST(request: Request) {
