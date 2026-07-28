@@ -126,6 +126,10 @@ h3 {
   color: var(--yellow);
 }
 
+.metric.bad strong {
+  color: var(--red);
+}
+
 .notice {
   display: flex;
   gap: 14px;
@@ -141,10 +145,20 @@ h3 {
   color: #615233;
 }
 
-.grid {
+.grid,
+.review-layout {
   display: grid;
   grid-template-columns: minmax(320px, 0.82fr) minmax(360px, 1.18fr);
   gap: 18px;
+}
+
+.review-layout {
+  grid-template-columns: minmax(360px, 0.95fr) minmax(420px, 1.05fr);
+  align-items: start;
+}
+
+.saved-panel {
+  margin-top: 18px;
 }
 
 .panel {
@@ -207,6 +221,48 @@ button:focus-visible {
   flex: 1;
 }
 
+.field-group {
+  display: grid;
+  gap: 12px;
+  border-top: 1px solid var(--line);
+  padding-top: 14px;
+}
+
+.field-group h3 {
+  margin-bottom: 0;
+}
+
+.scope-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.check-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 38px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #fff;
+  color: var(--ink);
+  padding: 8px 10px;
+  font-size: 0.84rem;
+  font-weight: 800;
+}
+
+.check-label input {
+  width: 16px;
+  min-height: 16px;
+  accent-color: var(--blue);
+}
+
+.switch {
+  align-self: end;
+  min-height: 44px;
+}
+
 button {
   display: inline-flex;
   align-items: center;
@@ -226,6 +282,12 @@ button:disabled {
 
 .primary {
   background: var(--blue);
+  color: #fff;
+}
+
+.secondary {
+  border: 1px solid rgba(47, 125, 92, 0.3);
+  background: var(--green);
   color: #fff;
 }
 
@@ -249,6 +311,47 @@ button:disabled {
 .review-list {
   display: grid;
   gap: 12px;
+}
+
+.save-form {
+  margin-top: 18px;
+  border-top: 1px solid var(--line);
+  padding-top: 18px;
+}
+
+.result-stack,
+.finding-list,
+.source-list {
+  display: grid;
+  gap: 12px;
+}
+
+.result-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.result-summary .metric {
+  min-height: 74px;
+  padding: 14px;
+}
+
+.result-summary .metric strong {
+  font-size: 1.6rem;
+}
+
+.narrative {
+  border: 1px solid rgba(34, 87, 122, 0.18);
+  border-radius: 8px;
+  background: #eef5f8;
+  padding: 14px;
+}
+
+.narrative p {
+  margin-bottom: 0;
+  color: #27404e;
+  line-height: 1.55;
 }
 
 .review-card {
@@ -302,8 +405,47 @@ button:disabled {
   color: #34413e;
 }
 
+.pill.finding.pass {
+  background: #e9f6ef;
+  color: var(--green);
+}
+
+.pill.finding.fail {
+  background: #fdebea;
+  color: var(--red);
+}
+
+.pill.finding.missing,
+.pill.finding.needs-review {
+  background: #fff2d2;
+  color: #7d5b17;
+}
+
 .notes {
   line-height: 1.55;
+}
+
+.citation {
+  border-left: 3px solid var(--line);
+  padding-left: 10px;
+  font-size: 0.84rem;
+  line-height: 1.45;
+}
+
+.source-list {
+  border-top: 1px solid var(--line);
+  padding-top: 12px;
+}
+
+.source-list a {
+  color: var(--blue);
+  font-weight: 800;
+  text-decoration: none;
+}
+
+.muted {
+  margin-bottom: 0;
+  color: var(--muted);
 }
 
 .empty {
@@ -328,7 +470,9 @@ button:disabled {
 
   .topbar,
   .grid,
+  .review-layout,
   .metrics,
+  .result-summary,
   .inline-fields {
     grid-template-columns: 1fr;
   }
