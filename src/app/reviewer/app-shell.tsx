@@ -559,9 +559,12 @@ export function AppShell() {
     <main className="app">
       <section className="workspace">
         <header className="topbar">
-          <div>
-            <p className="eyebrow">Standards review workspace</p>
-            <h1>City Form Reviewer</h1>
+          <div className="brand-lockup">
+            <div className="brand-mark" aria-hidden="true">🏛</div>
+            <div>
+              <h1>City Form Reviewer</h1>
+              <p>AI compliance review</p>
+            </div>
           </div>
           <div className="topbar-actions">
             <button className={`nav-button ${activeView === "reviewer" ? "active" : ""}`} onClick={() => setActiveView("reviewer")}>
@@ -576,6 +579,9 @@ export function AppShell() {
             >
               <UserCircle size={18} />
               <span>Profile</span>
+            </button>
+            <button className="user-avatar" onClick={() => setActiveView("profile")} aria-label="Open profile">
+              {(user.user_metadata.full_name || user.email || "U").charAt(0).toUpperCase()}
             </button>
             <button className="icon-button" onClick={signOut} aria-label="Sign out">
               <LogOut size={18} />
@@ -599,6 +605,26 @@ export function AppShell() {
           />
         ) : (
         <>
+        <section className="review-hero">
+          <div>
+            <p className="eyebrow">Start a compliance review</p>
+            <h2>Upload a proposal. Get a clear, sourced risk review.</h2>
+            <p>
+              AI identifies the jurisdiction and project scope, retrieves controlling standards,
+              applies stricter site-specific requirements, and prepares every finding for an
+              engineer&apos;s decision.
+            </p>
+          </div>
+          <button
+            className="hero-action"
+            type="button"
+            onClick={() => document.querySelector(".intake-panel")?.scrollIntoView({ behavior: "smooth" })}
+          >
+            <Upload size={18} />
+            New review
+          </button>
+        </section>
+
         <div className="metrics">
           <Metric label="Saved reviews" value={reviews.length.toString()} />
           <Metric label="Needs attention" value={needsAttention.toString()} tone="warn" />
