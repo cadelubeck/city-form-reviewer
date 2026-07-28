@@ -1,8 +1,15 @@
 import { NextResponse } from "next/server";
-import { structuredResponse } from "@/lib/openai";
+import {
+  parseStructuredResponse,
+  retrieveBackgroundResponse,
+  startBackgroundStructuredResponse,
+  structuredResponse
+} from "@/lib/openai";
 import { authenticatedSupabase } from "@/lib/server-supabase";
 
 export const maxDuration = 300;
+
+type StandardRequirement = Record<string, unknown>;
 
 const sectionSchema = {
   type: "object",
@@ -93,6 +100,96 @@ const deepReviewSchema = {
   }
 };
 
+async function loadProposalAndStandards(auth: NonNullable<Awaited<ReturnType<typeof authenticatedSupabase>>>, proposalId: string) {
+  const { data: proposal, error: proposalError } = await auth.client
+    .from("proposals").select("*").eq("id", proposalId).single();
+  if (proposalError || !proposal) throw new Error(proposalError?.message ?? "Proposal not found.");
+  const { data: documents, error: documentsError } = await auth.client
+    .from("engineering_documents")
+    .select("id,title,document_type,jurisdiction,client_id,project_types,source_url,requirements")
+    .is("archived_at", null);
+  if (documentsError) throw new Error(documentsError.message);
+  const location = String(proposal.location ?? "").toLowerCase();
+  const client = String(proposal.client ?? "").toLowerCase();
+  const applicable = (documents ?? []).filter((document) =>
+    (!document.jurisdiction || location.includes(String(document.jurisdiction).toLowerCase())) &&
+    (!document.client_id || client.includes(String(document.client_id).toLowerCase()))
+  );
+  const standards = applicable.flatMap((document) =>
+    (document.requirements ?? []).map((requirement: StandardRequirement) => ({
+      ...requirement,
+      documentId: document.id,
+      documentTitle: document.title,
+      documentType: document.document_type,
+      sourceUrl: requirement.sourceUrl ?? document.source_url
+    }))
+  ).slice(0, 600);
+  return { proposal, standards };
+}
+
+function enrichReview(data: Record<string, unknown>, standards: StandardRequirement[]) {
+  const requirementById = new Map<string, StandardRequirement>(
+    standards.map((requirement) => [String(requirement.id ?? ""), requirement])
+  );
+  const pages = (data.pages as Array<Record<string, unknown>> ?? []).map((page) => ({
+    ...page,
+    findings: (page.findings as Array<Record<string, unknown>> ?? []).map((finding) => {
+      const requirement = requirementById.get(String(finding.standardId ?? ""));
+      return {
+        ...finding,
+        standardTitle: requirement ? String(requirement.documentTitle ?? requirement.sourceTitle ?? finding.standardTitle) : String(finding.standardTitle),
+        standardPage: requirement?.page ?? finding.standardPage ?? null,
+        standardUrl: requirement?.sourceUrl ?? null
+      };
+    })
+  }));
+  return { ...data, pages };
+}
+
+export async function GET(request: Request) {
+  const auth = await authenticatedSupabase(request);
+  if (!auth) return NextResponse.json({ error: "Authentication required." }, { status: 401 });
+  try {
+    const proposalId = new URL(request.url).searchParams.get("proposalId") ?? "";
+    const { proposal, standards } = await loadProposalAndStandards(auth, proposalId);
+    const job = proposal.diagram_analysis as { responseId?: string; status?: string } | null;
+    if (!job?.responseId) {
+      return NextResponse.json({ error: "No deep review is currently running." }, { status: 404 });
+    }
+    const response = await retrieveBackgroundResponse(job.responseId);
+    if (response.status === "queued" || response.status === "in_progress") {
+      return NextResponse.json({ status: response.status, responseId: response.id }, { status: 202 });
+    }
+    if (response.status !== "completed") {
+      const message = response.error?.message ?? `Deep review ended with status ${response.status ?? "unknown"}.`;
+      await auth.client.from("proposals").update({
+        diagram_analysis: { responseId: response.id, status: response.status ?? "failed", error: message }
+      }).eq("id", proposalId);
+      return NextResponse.json({ error: message, status: response.status }, { status: 500 });
+    }
+    const review = enrichReview(parseStructuredResponse<Record<string, unknown>>(response), standards);
+    const pages = review.pages as Array<Record<string, unknown>>;
+    const { error: updateError } = await auth.client.from("proposals").update({
+      page_reviews: pages,
+      diagram_analysis: review,
+      status: "in_review"
+    }).eq("id", proposalId);
+    if (updateError) throw new Error(updateError.message);
+    await auth.client.from("proposal_history").insert({
+      proposal_id: proposalId,
+      company_id: auth.companyId,
+      actor_id: auth.user.id,
+      event_type: "deep_review_saved",
+      status: "in_review",
+      summary: `Saved page-by-page AI review for ${pages.length} pages.`,
+      snapshot: review
+    });
+    return NextResponse.json({ status: "completed", data: review, responseId: response.id, model: response.model });
+  } catch (error) {
+    return NextResponse.json({ error: error instanceof Error ? error.message : "Unable to check review status." }, { status: 500 });
+  }
+}
+
 export async function POST(request: Request) {
   const auth = await authenticatedSupabase(request);
   if (!auth) return NextResponse.json({ error: "Authentication required." }, { status: 401 });
@@ -101,31 +198,7 @@ export async function POST(request: Request) {
     const mode = body.mode === "deep" ? "deep" : body.mode === "diagrams" ? "diagrams" : "section";
     if (mode === "deep") {
       const proposalId = String(body.proposalId ?? "");
-      const { data: proposal, error: proposalError } = await auth.client
-        .from("proposals").select("*").eq("id", proposalId).single();
-      if (proposalError || !proposal) {
-        return NextResponse.json({ error: proposalError?.message ?? "Proposal not found." }, { status: 404 });
-      }
-      const { data: documents, error: documentsError } = await auth.client
-        .from("engineering_documents")
-        .select("id,title,document_type,jurisdiction,client_id,project_types,source_url,requirements")
-        .is("archived_at", null);
-      if (documentsError) throw new Error(documentsError.message);
-      const location = String(proposal.location ?? "").toLowerCase();
-      const client = String(proposal.client ?? "").toLowerCase();
-      const applicable = (documents ?? []).filter((document) =>
-        (!document.jurisdiction || location.includes(String(document.jurisdiction).toLowerCase())) &&
-        (!document.client_id || client.includes(String(document.client_id).toLowerCase()))
-      );
-      const standards = applicable.flatMap((document) =>
-        (document.requirements ?? []).map((requirement: Record<string, unknown>) => ({
-          ...requirement,
-          documentId: document.id,
-          documentTitle: document.title,
-          documentType: document.document_type,
-          sourceUrl: requirement.sourceUrl ?? document.source_url
-        }))
-      ).slice(0, 600);
+      const { proposal, standards } = await loadProposalAndStandards(auth, proposalId);
 
       let documentInput: Record<string, unknown>;
       if (proposal.file_path) {
@@ -140,12 +213,11 @@ export async function POST(request: Request) {
       } else {
         documentInput = { type: "input_text", text: String(proposal.text_content ?? "").slice(0, 180000) };
       }
-      const result = await structuredResponse<Record<string, unknown>>({
+      const result = await startBackgroundStructuredResponse({
         name: "deep_civil_page_review",
         schema: deepReviewSchema,
         reasoningEffort: "high",
         maxOutputTokens: 16000,
-        timeoutMs: 180_000,
         instructions: `You are an AI civil proposal review assistant, not the approving engineer.
 Inspect every page in order, including every visible word, note, table, callout, plan, profile,
 detail, section, schedule, symbol, dimension, legend, stamp, and diagram. Return one page record
@@ -171,25 +243,12 @@ ${JSON.stringify(standards)}`
           ]
         }]
       });
-      const requirementById = new Map<string, Record<string, unknown>>(
-        standards.map((requirement) => [String(requirement.id ?? ""), requirement])
-      );
-      const pages = (result.data.pages as Array<Record<string, unknown>> ?? []).map((page) => ({
-        ...page,
-        findings: (page.findings as Array<Record<string, unknown>> ?? []).map((finding) => {
-          const requirement = requirementById.get(String(finding.standardId ?? ""));
-          return {
-            ...finding,
-            standardTitle: requirement ? String(requirement.documentTitle ?? requirement.sourceTitle ?? finding.standardTitle) : String(finding.standardTitle),
-            standardPage: requirement?.page ?? finding.standardPage ?? null,
-            standardUrl: requirement?.sourceUrl ?? null
-          };
-        })
-      }));
-      const review = { ...result.data, pages };
       const { error: updateError } = await auth.client.from("proposals").update({
-        page_reviews: pages,
-        diagram_analysis: review,
+        diagram_analysis: {
+          responseId: result.id,
+          status: result.status ?? "queued",
+          startedAt: new Date().toISOString()
+        },
         status: "in_review"
       }).eq("id", proposalId);
       if (updateError) throw new Error(updateError.message);
@@ -197,12 +256,16 @@ ${JSON.stringify(standards)}`
         proposal_id: proposalId,
         company_id: auth.companyId,
         actor_id: auth.user.id,
-        event_type: "deep_review_saved",
+        event_type: "deep_review_started",
         status: "in_review",
-        summary: `Saved page-by-page AI review for ${pages.length} pages.`,
-        snapshot: review
+        summary: "Started a durable page-by-page AI review.",
+        snapshot: { responseId: result.id, status: result.status ?? "queued" }
       });
-      return NextResponse.json({ data: review, responseId: result.responseId, model: result.model });
+      return NextResponse.json({
+        status: result.status ?? "queued",
+        responseId: result.id,
+        model: result.model
+      }, { status: 202 });
     }
     const text = String(body.text ?? "").slice(0, 90000);
     const result = await structuredResponse<Record<string, unknown>>({

@@ -271,20 +271,44 @@ function ProposalDetail({ proposal, user, headers, onBack, onUpdate, onReplace, 
   async function runDeepReview() {
     setBusy("deep"); setMessage("The AI is reviewing every page, word, table, and diagram. This may take several minutes.");
     try {
-      const response = await apiFetch("/api/proposals/analyze", {
-        method: "POST", headers: { "Content-Type": "application/json", ...(await headers()) },
-        body: JSON.stringify({ mode: "deep", proposalId: proposal.id }),
-        signal: AbortSignal.timeout(290_000)
-      }, 200_000);
-      const data = await response.json().catch(() => ({ error: "The AI response could not be read." }));
-      if (!response.ok) return setMessage(data.error ?? "Deep document review failed.");
-      const pages = data.data.pages ?? [];
-      await onUpdate({ id: proposal.id, page_reviews: pages, diagram_analysis: data.data, status: "in_review" });
-      setActivePage(pages[0]?.page ?? 1);
-      setMessage(`Deep review complete: ${pages.length} page${pages.length === 1 ? "" : "s"} reviewed.`);
+      const currentJob = proposal.diagram_analysis as { responseId?: string; status?: string } | null;
+      const alreadyRunning = currentJob?.responseId &&
+        (currentJob.status === "queued" || currentJob.status === "in_progress");
+      if (!alreadyRunning) {
+        const start = await apiFetch("/api/proposals/analyze", {
+          method: "POST", headers: { "Content-Type": "application/json", ...(await headers()) },
+          body: JSON.stringify({ mode: "deep", proposalId: proposal.id })
+        }, 75_000);
+        const started = await start.json().catch(() => ({ error: "The AI response could not be read." }));
+        if (!start.ok) return setMessage(started.error ?? "Deep document review failed.");
+      } else {
+        setMessage("Reconnected to the saved background review. Checking for completed results…");
+      }
+
+      const deadline = Date.now() + 9 * 60_000;
+      while (Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 4_000));
+        const response = await apiFetch(
+          `/api/proposals/analyze?proposalId=${encodeURIComponent(proposal.id)}`,
+          { headers: await headers() },
+          45_000
+        );
+        const data = await response.json().catch(() => ({ error: "The AI response could not be read." }));
+        if (response.status === 202) {
+          setMessage("Deep review is running safely in the background. You can keep this page open while results are collected.");
+          continue;
+        }
+        if (!response.ok) return setMessage(data.error ?? "Deep document review failed.");
+        const pages = data.data?.pages ?? [];
+        onReplace({ ...proposal, page_reviews: pages, diagram_analysis: data.data, status: "in_review" });
+        setActivePage(pages[0]?.page ?? 1);
+        setMessage(`Deep review complete: ${pages.length} page${pages.length === 1 ? "" : "s"} reviewed and saved.`);
+        return;
+      }
+      setMessage("The review is still processing and remains saved. Open this proposal again to check its result.");
     } catch (error) {
       setMessage(error instanceof Error && error.name === "TimeoutError"
-        ? "The deep review exceeded the browser wait limit. Retry it; the contract remains saved."
+        ? "A status check timed out, but the background review remains saved. Open this proposal again to continue checking it."
         : error instanceof Error ? error.message : "Deep document review failed.");
     } finally {
       setBusy("");
@@ -342,7 +366,12 @@ function ProposalDetail({ proposal, user, headers, onBack, onUpdate, onReplace, 
     {message ? <p className="message">{message}</p> : null}
     <div className="detail-actions">
       <button className="primary" onClick={runCompliance} disabled={!!busy}><CheckCircle2 size={17} />{busy === "compliance" ? "Reviewing…" : "Controlling standards"}</button>
-      <button className="soft-button" onClick={runDeepReview} disabled={!!busy}><FileSearch size={17} />{busy === "deep" ? "Reviewing every page…" : proposal.page_reviews?.length ? "Re-run deep page review" : "Deep review: words, pages & diagrams"}</button>
+      <button className="soft-button" onClick={runDeepReview} disabled={!!busy}><FileSearch size={17} />{busy === "deep"
+        ? "Reviewing every page…"
+        : (proposal.diagram_analysis as { status?: string } | null)?.status === "queued" ||
+            (proposal.diagram_analysis as { status?: string } | null)?.status === "in_progress"
+          ? "Continue background review"
+          : proposal.page_reviews?.length ? "Re-run deep page review" : "Deep review: words, pages & diagrams"}</button>
       <span>{proposal.project_scope.join(" · ") || "Scope not detected"}</span>
     </div>
     {proposal.page_reviews?.length ? <nav className="page-review-nav" aria-label="Reviewed pages">

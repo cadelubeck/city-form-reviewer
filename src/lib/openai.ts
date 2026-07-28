@@ -19,6 +19,83 @@ function outputText(payload: { output_text?: string; output?: Array<{ content?: 
     .join("");
 }
 
+export type BackgroundResponse = {
+  id: string;
+  model?: string;
+  status?: string;
+  error?: { message?: string } | null;
+  output_text?: string;
+  output?: Array<{ content?: Array<{ type?: string; text?: string }> }>;
+};
+
+function responseBody(options: {
+  name: string;
+  schema: Record<string, unknown>;
+  instructions: string;
+  input: unknown;
+  maxOutputTokens?: number;
+  reasoningEffort?: "none" | "low" | "medium" | "high" | "xhigh" | "max";
+}) {
+  return {
+    model: process.env.OPENAI_MODEL ?? "gpt-5.6-sol",
+    instructions: options.instructions,
+    input: options.input,
+    reasoning: { effort: options.reasoningEffort ?? "low" },
+    max_output_tokens: options.maxOutputTokens ?? 6000,
+    text: {
+      verbosity: "high",
+      format: {
+        type: "json_schema",
+        name: options.name,
+        strict: true,
+        schema: options.schema
+      }
+    }
+  };
+}
+
+export async function startBackgroundStructuredResponse(options: {
+  name: string;
+  schema: Record<string, unknown>;
+  instructions: string;
+  input: unknown;
+  maxOutputTokens?: number;
+  reasoningEffort?: "none" | "low" | "medium" | "high" | "xhigh" | "max";
+}) {
+  const response = await fetch(RESPONSES_URL, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiKey()}`,
+      "Content-Type": "application/json"
+    },
+    signal: AbortSignal.timeout(60_000),
+    body: JSON.stringify({ ...responseBody(options), background: true, store: true })
+  });
+  const body = await response.json() as BackgroundResponse;
+  if (!response.ok || !body.id) {
+    throw new Error(body.error?.message ?? `OpenAI API error ${response.status}`);
+  }
+  return body;
+}
+
+export async function retrieveBackgroundResponse(responseId: string) {
+  const response = await fetch(`${RESPONSES_URL}/${encodeURIComponent(responseId)}`, {
+    headers: { Authorization: `Bearer ${apiKey()}` },
+    signal: AbortSignal.timeout(30_000)
+  });
+  const body = await response.json() as BackgroundResponse;
+  if (!response.ok) {
+    throw new Error(body.error?.message ?? `OpenAI API error ${response.status}`);
+  }
+  return body;
+}
+
+export function parseStructuredResponse<T>(body: BackgroundResponse) {
+  const text = outputText(body);
+  if (!text) throw new Error("OpenAI returned no structured output.");
+  return JSON.parse(text) as T;
+}
+
 export async function structuredResponse<T>(options: {
   name: string;
   schema: Record<string, unknown>;
@@ -38,22 +115,7 @@ export async function structuredResponse<T>(options: {
           "Content-Type": "application/json"
         },
         signal: AbortSignal.timeout(options.timeoutMs ?? DEFAULT_TIMEOUT_MS),
-        body: JSON.stringify({
-          model: process.env.OPENAI_MODEL ?? "gpt-5.6-sol",
-          instructions: options.instructions,
-          input: options.input,
-          reasoning: { effort: options.reasoningEffort ?? "low" },
-          max_output_tokens: options.maxOutputTokens ?? 6000,
-          text: {
-            verbosity: "high",
-            format: {
-              type: "json_schema",
-              name: options.name,
-              strict: true,
-              schema: options.schema
-            }
-          }
-        })
+        body: JSON.stringify(responseBody(options))
       });
 
       const body = (await response.json()) as {
