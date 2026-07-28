@@ -309,9 +309,15 @@ export function AppShell() {
     setAiNarrative(null);
 
     const startedAt = Date.now();
+    const accessToken = supabase
+      ? (await supabase.auth.getSession()).data.session?.access_token
+      : null;
     const response = await fetch("/api/reviews", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {})
+      },
       body: JSON.stringify({
         proposal: {
           projectName: form.projectName || form.applicant || "Untitled project",
@@ -352,7 +358,8 @@ export function AppShell() {
             }
           ]
         },
-        siteFindings: buildSiteFindings()
+        siteFindings: buildSiteFindings(),
+        siteDocumentText: form.geotechText
       })
     });
 

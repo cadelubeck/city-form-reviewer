@@ -20,17 +20,52 @@ function findSubmittedValue(measurements: ProposalMeasurement[], metric: string)
   return measurements.find((measurement) => measurement.metric === metric);
 }
 
-function isStricter(candidate: Requirement | SiteFinding, baseline: Requirement) {
-  if (candidate.metric !== baseline.metric || candidate.comparator !== baseline.comparator) {
-    return false;
+function canonicalUnit(unit?: string) {
+  const value = (unit ?? "").trim().toLowerCase();
+  return (
+    {
+      inch: "in",
+      inches: "in",
+      '"': "in",
+      foot: "ft",
+      feet: "ft",
+      "'": "ft",
+      percent: "%",
+      percentage: "%"
+    }[value] ?? value
+  );
+}
+
+function convertedNumber(value: number | string | boolean, from?: string, to?: string) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return null;
+  const source = canonicalUnit(from);
+  const target = canonicalUnit(to);
+  if (source === target) return number;
+  if (source === "ft" && target === "in") return number * 12;
+  if (source === "in" && target === "ft") return number / 12;
+  return null;
+}
+
+function comparable(candidate: Requirement | SiteFinding, baseline: Requirement) {
+  if (candidate.metric !== baseline.metric || candidate.comparator !== baseline.comparator) return false;
+  if (["minimum", "maximum"].includes(candidate.comparator)) {
+    return convertedNumber(candidate.value, candidate.unit, baseline.unit) !== null;
   }
+  return canonicalUnit(candidate.unit) === canonicalUnit(baseline.unit);
+}
+
+function isStricter(candidate: Requirement | SiteFinding, baseline: Requirement) {
+  if (!comparable(candidate, baseline)) return false;
+  const candidateValue = convertedNumber(candidate.value, candidate.unit, baseline.unit);
+  const baselineValue = convertedNumber(baseline.value, baseline.unit, baseline.unit);
 
   if (candidate.comparator === "minimum") {
-    return Number(candidate.value) > Number(baseline.value);
+    return candidateValue !== null && baselineValue !== null && candidateValue > baselineValue;
   }
 
   if (candidate.comparator === "maximum") {
-    return Number(candidate.value) < Number(baseline.value);
+    return candidateValue !== null && baselineValue !== null && candidateValue < baselineValue;
   }
 
   if (candidate.comparator === "presence") {
@@ -42,8 +77,12 @@ function isStricter(candidate: Requirement | SiteFinding, baseline: Requirement)
 
 function compareValue(
   requirement: Requirement | SiteFinding,
-  submitted: ProposalMeasurement | undefined
+  submitted: ProposalMeasurement | undefined,
+  conflict?: string
 ): Pick<ReviewFinding, "status" | "explanation" | "submittedValue"> {
+  if (conflict) {
+    return { status: "needs-review", submittedValue: submitted?.value ?? null, explanation: conflict };
+  }
   if (!submitted || submitted.value === null || submitted.value === "") {
     return {
       status: "missing",
@@ -53,7 +92,13 @@ function compareValue(
   }
 
   if (requirement.comparator === "minimum") {
-    const passes = Number(submitted.value) >= Number(requirement.value);
+    const submittedValue = convertedNumber(submitted.value, submitted.unit, requirement.unit);
+    if (submittedValue === null) return {
+      status: "needs-review",
+      submittedValue: submitted.value,
+      explanation: "Submitted and controlling units are not deterministically comparable."
+    };
+    const passes = submittedValue >= Number(requirement.value);
     return {
       status: passes ? "pass" : "fail",
       submittedValue: submitted.value,
@@ -64,7 +109,13 @@ function compareValue(
   }
 
   if (requirement.comparator === "maximum") {
-    const passes = Number(submitted.value) <= Number(requirement.value);
+    const submittedValue = convertedNumber(submitted.value, submitted.unit, requirement.unit);
+    if (submittedValue === null) return {
+      status: "needs-review",
+      submittedValue: submitted.value,
+      explanation: "Submitted and controlling units are not deterministically comparable."
+    };
+    const passes = submittedValue <= Number(requirement.value);
     return {
       status: passes ? "pass" : "fail",
       submittedValue: submitted.value,
@@ -101,7 +152,24 @@ export function selectControllingRequirements(
   siteFindings: SiteFinding[]
 ): ControllingRequirement[] {
   return standards.filter((standard) => appliesToProposal(standard, proposal)).map((baseRequirement) => {
-    const stricterFinding = siteFindings.find((finding) => isStricter(finding, baseRequirement));
+    const relatedFindings = siteFindings.filter((finding) => finding.metric === baseRequirement.metric);
+    const incompatible = relatedFindings.find((finding) => !comparable(finding, baseRequirement));
+    if (incompatible) {
+      return {
+        baseRequirement,
+        controlling: baseRequirement,
+        overrideApplied: false,
+        overrideReason: "City standard remains the provisional baseline.",
+        conflict: `The site-specific source uses an incompatible unit, comparator, or value for ${baseRequirement.metric}. A licensed engineer must resolve the conflict.`
+      };
+    }
+    const stricterFinding = relatedFindings
+      .filter((finding) => isStricter(finding, baseRequirement))
+      .sort((a, b) => {
+        const av = convertedNumber(a.value, a.unit, baseRequirement.unit) ?? 0;
+        const bv = convertedNumber(b.value, b.unit, baseRequirement.unit) ?? 0;
+        return baseRequirement.comparator === "maximum" ? av - bv : bv - av;
+      })[0];
 
     if (!stricterFinding) {
       return {
@@ -128,9 +196,9 @@ export function reviewProposal(
   sourcesUsed: SourceRegistryItem[]
 ): ReviewResult {
   const controllingRequirements = selectControllingRequirements(proposal, standards, siteFindings);
-  const findings = controllingRequirements.map<ReviewFinding>(({ baseRequirement, controlling }) => {
+  const findings = controllingRequirements.map<ReviewFinding>(({ baseRequirement, controlling, conflict }) => {
     const submitted = findSubmittedValue(proposal.measurements, controlling.metric);
-    const comparison = compareValue(controlling, submitted);
+    const comparison = compareValue(controlling, submitted, conflict);
 
     return {
       requirementId: baseRequirement.id,
@@ -142,7 +210,17 @@ export function reviewProposal(
       status: comparison.status,
       controllingSource: controlling.sourceTitle,
       citation: controlling.citation,
-      explanation: comparison.explanation
+      explanation: comparison.explanation,
+      recommendedCorrection:
+        comparison.status === "fail"
+          ? `Revise the proposal to meet ${String(controlling.value)} ${controlling.unit ?? ""}.`.trim()
+          : comparison.status === "missing"
+            ? "Provide the missing value or supporting document."
+            : comparison.status === "needs-review"
+              ? "Have the responsible engineer resolve the comparison before approval."
+              : "",
+      sourcePage: controlling.page,
+      sourceExcerpt: controlling.excerpt
     };
   });
 

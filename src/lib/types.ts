@@ -62,6 +62,9 @@ export interface Requirement {
   sourceUrl?: string;
   scopeTags: string[];
   rationale: string;
+  page?: number | null;
+  excerpt?: string;
+  embedding?: number[];
 }
 
 export interface ProposalMeasurement {
@@ -69,6 +72,7 @@ export interface ProposalMeasurement {
   value: number | string | boolean | null;
   unit?: string;
   citation?: string;
+  embedding?: number[];
 }
 
 export interface ProposalSubmission {
@@ -94,6 +98,9 @@ export interface SiteFinding {
   citation: string;
   sourceUrl?: string;
   rationale: string;
+  page?: number | null;
+  excerpt?: string;
+  embedding?: number[];
 }
 
 export interface ControllingRequirement {
@@ -101,6 +108,7 @@ export interface ControllingRequirement {
   controlling: Requirement | SiteFinding;
   overrideApplied: boolean;
   overrideReason: string;
+  conflict?: string;
 }
 
 export interface ReviewFinding {
@@ -114,6 +122,9 @@ export interface ReviewFinding {
   controllingSource: string;
   citation: string;
   explanation: string;
+  recommendedCorrection: string;
+  sourcePage?: number | null;
+  sourceExcerpt?: string;
 }
 
 export interface ReviewResult {
