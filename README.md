@@ -37,8 +37,9 @@ stricter than the city baseline.
    ```bash
    NEXT_PUBLIC_SUPABASE_URL=your-project-url
    NEXT_PUBLIC_SUPABASE_ANON_KEY=your-anon-key
-   OPENAI_API_KEY=optional-openai-key
-   OPENAI_MODEL=gpt-5-mini
+   OPENAI_API_KEY=your-server-side-openai-key
+   OPENAI_MODEL=gpt-5.6-sol
+   OPENAI_EMBEDDING_MODEL=text-embedding-3-small
    ```
 
 5. Start the app:
@@ -64,6 +65,20 @@ stricter than the city baseline.
 
 The current source registry includes Jones Civil public client references, Brigham City public
 standards, USGS seismic screening, FEMA flood mapping, and NRCS soils screening.
+
+## OpenAI-assisted compliance architecture
+
+- The server uses the OpenAI Responses API with strict JSON Schema outputs.
+- Proposal and geotechnical/site-report text is converted into structured civil requirements.
+- Embeddings are generated for requirement-level semantic retrieval.
+- The deterministic review engine—not the model—selects the controlling value.
+- City/client standards remain the baseline. A site source controls only when its value is
+  deterministically comparable and stricter.
+- Compatible inch/foot values are normalized. Incompatible units, comparators, or categorical
+  conflicts are sent to licensed-engineer review.
+- Every finding includes its controlling source, citation, optional page/excerpt, explanation,
+  and recommended correction.
+- AI narrative output is advisory and cannot approve a proposal.
 
 ## Security notes
 
