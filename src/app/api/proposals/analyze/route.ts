@@ -6,6 +6,11 @@ import {
   structuredResponse
 } from "@/lib/openai";
 import { authenticatedSupabase } from "@/lib/server-supabase";
+import { reviewProposal } from "@/lib/review-engine";
+import type {
+  Comparator, ProposalMeasurement, ProposalSubmission, Requirement, RequirementSourceType,
+  SiteFinding, SourceRegistryItem
+} from "@/lib/types";
 
 export const maxDuration = 300;
 
@@ -51,10 +56,44 @@ const diagramSchema = {
 const deepReviewSchema = {
   type: "object",
   additionalProperties: false,
-  required: ["overallCompliance", "executiveSummary", "pages", "globalMissingInformation"],
+  required: [
+    "overallCompliance", "executiveSummary", "detectedJurisdiction", "projectScope",
+    "extractedRequirements", "pages", "globalMissingInformation"
+  ],
   properties: {
     overallCompliance: { type: "string", enum: ["green", "yellow", "red"] },
     executiveSummary: { type: "string" },
+    detectedJurisdiction: {
+      type: "object",
+      additionalProperties: false,
+      required: ["city", "county", "state", "confidence", "evidence"],
+      properties: {
+        city: { type: ["string", "null"] },
+        county: { type: ["string", "null"] },
+        state: { type: ["string", "null"] },
+        confidence: { type: "number" },
+        evidence: { type: "string" }
+      }
+    },
+    projectScope: { type: "array", items: { type: "string" } },
+    extractedRequirements: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["topic", "metric", "description", "comparator", "value", "unit", "page", "excerpt"],
+        properties: {
+          topic: { type: "string" },
+          metric: { type: "string" },
+          description: { type: "string" },
+          comparator: { type: "string", enum: ["minimum", "maximum", "exact", "presence"] },
+          value: { type: ["number", "string", "boolean"] },
+          unit: { type: ["string", "null"] },
+          page: { type: ["integer", "null"] },
+          excerpt: { type: "string" }
+        }
+      }
+    },
     pages: {
       type: "array",
       items: {
@@ -127,7 +166,78 @@ async function loadProposalAndStandards(auth: NonNullable<Awaited<ReturnType<typ
   return { proposal, standards };
 }
 
-function enrichReview(data: Record<string, unknown>, standards: StandardRequirement[]) {
+function compactStandardsForModel(standards: StandardRequirement[]) {
+  return standards.map((requirement) => ({
+    id: requirement.id,
+    topic: requirement.topic,
+    metric: requirement.metric,
+    comparator: requirement.comparator,
+    value: requirement.value,
+    unit: requirement.unit,
+    sourceTitle: requirement.documentTitle ?? requirement.sourceTitle,
+    page: requirement.page,
+    citation: requirement.citation ?? requirement.excerpt,
+    sourceUrl: requirement.sourceUrl,
+    documentType: requirement.documentType
+  }));
+}
+
+function deterministicReview(
+  proposal: Record<string, unknown>,
+  review: Record<string, unknown>,
+  standards: StandardRequirement[]
+) {
+  const clientId = String(proposal.client ?? "").trim().toLowerCase().replaceAll(/[^a-z0-9]+/g, "-");
+  const jurisdiction = String(proposal.location ?? "").trim();
+  const commonScope = ["applicable"];
+  const measurements = (review.extractedRequirements as Array<Record<string, unknown>> ?? []).map<ProposalMeasurement>((item) => ({
+    metric: String(item.metric ?? ""),
+    value: item.value as number | string | boolean,
+    unit: item.unit ? String(item.unit) : undefined,
+    citation: String(item.excerpt ?? "")
+  }));
+  const normalized = standards.map((item) => ({
+    id: String(item.id ?? crypto.randomUUID()),
+    clientId,
+    jurisdiction,
+    topic: String(item.topic ?? item.metric ?? "Requirement"),
+    metric: String(item.metric ?? ""),
+    comparator: String(item.comparator ?? "exact") as Comparator,
+    value: item.value as number | string | boolean,
+    unit: item.unit ? String(item.unit) : undefined,
+    sourceType: String(item.documentType ?? item.sourceType ?? "city-standard") as RequirementSourceType,
+    sourceTitle: String(item.documentTitle ?? item.sourceTitle ?? "Standards library"),
+    citation: String(item.citation ?? item.excerpt ?? ""),
+    sourceUrl: item.sourceUrl ? String(item.sourceUrl) : undefined,
+    scopeTags: commonScope,
+    rationale: String(item.rationale ?? item.description ?? ""),
+    page: typeof item.page === "number" ? item.page : null,
+    excerpt: item.excerpt ? String(item.excerpt) : undefined,
+    embedding: Array.isArray(item.embedding) ? item.embedding as number[] : undefined
+  }));
+  const baselineTypes = new Set(["city-standard", "client-standard", "manual"]);
+  const baseline = normalized.filter((item) => baselineTypes.has(item.sourceType)) as Requirement[];
+  const site = normalized.filter((item) => !baselineTypes.has(item.sourceType)) as SiteFinding[];
+  const submission: ProposalSubmission = {
+    projectName: String(proposal.name ?? "Untitled proposal"),
+    clientId,
+    jurisdiction,
+    address: jurisdiction,
+    scopeTags: commonScope,
+    measurements,
+    uploadedFiles: proposal.original_name ? [String(proposal.original_name)] : []
+  };
+  const sources = Array.from(new Map(normalized.map((item) => [item.sourceTitle, {
+    id: item.sourceTitle,
+    name: item.sourceTitle,
+    type: item.sourceType,
+    url: item.sourceUrl,
+    use: "Applicable company standards or site-specific source."
+  } satisfies SourceRegistryItem])).values());
+  return reviewProposal(submission, baseline, site, sources);
+}
+
+function enrichReview(data: Record<string, unknown>, standards: StandardRequirement[]): Record<string, unknown> {
   const requirementById = new Map<string, StandardRequirement>(
     standards.map((requirement) => [String(requirement.id ?? ""), requirement])
   );
@@ -169,9 +279,15 @@ export async function GET(request: Request) {
     }
     const review = enrichReview(parseStructuredResponse<Record<string, unknown>>(response), standards);
     const pages = review.pages as Array<Record<string, unknown>>;
+    const complianceReview = deterministicReview(proposal, review, standards);
+    const extractedRequirements = review.extractedRequirements as Array<Record<string, unknown>> ?? [];
     const { error: updateError } = await auth.client.from("proposals").update({
       page_reviews: pages,
       diagram_analysis: review,
+      compliance_review: complianceReview,
+      detected_jurisdiction: review.detectedJurisdiction ?? {},
+      project_scope: review.projectScope ?? [],
+      extracted_requirements: extractedRequirements,
       status: "in_review"
     }).eq("id", proposalId);
     if (updateError) throw new Error(updateError.message);
@@ -184,7 +300,14 @@ export async function GET(request: Request) {
       summary: `Saved page-by-page AI review for ${pages.length} pages.`,
       snapshot: review
     });
-    return NextResponse.json({ status: "completed", data: review, responseId: response.id, model: response.model });
+    return NextResponse.json({
+      status: "completed",
+      data: review,
+      complianceReview,
+      extractedRequirements,
+      responseId: response.id,
+      model: response.model
+    });
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : "Unable to check review status." }, { status: 500 });
   }
@@ -213,6 +336,7 @@ export async function POST(request: Request) {
       } else {
         documentInput = { type: "input_text", text: String(proposal.text_content ?? "").slice(0, 180000) };
       }
+      const modelStandards = compactStandardsForModel(standards);
       const result = await startBackgroundStructuredResponse({
         name: "deep_civil_page_review",
         schema: deepReviewSchema,
@@ -222,6 +346,9 @@ export async function POST(request: Request) {
 Inspect every page in order, including every visible word, note, table, callout, plan, profile,
 detail, section, schedule, symbol, dimension, legend, stamp, and diagram. Return one page record
 for every page, even if it has no deficiency. Do not infer unreadable values.
+
+Also extract every explicit submitted civil-engineering value once into extractedRequirements.
+Use stable snake_case metrics, supported page numbers, preserved units, and brief evidence.
 
 Compare only against the supplied standards library. The city/client standard is the baseline;
 a site-specific requirement controls only when it is demonstrably stricter. Cite the proposal
@@ -238,7 +365,7 @@ engineering judgment for the licensed human reviewer.`,
               text: `PROJECT\nName: ${proposal.name}\nClient: ${proposal.client}\nJurisdiction: ${proposal.location}\nScope: ${(proposal.project_scope ?? []).join(", ")}
 
 CONTROLLING-STANDARD CANDIDATES (authoritative supplied library only)
-${JSON.stringify(standards)}`
+${JSON.stringify(modelStandards)}`
             }
           ]
         }]

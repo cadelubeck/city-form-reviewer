@@ -1,10 +1,10 @@
 # City Form Reviewer
 
-A low-cost SaaS foundation for reviewing and saving city form intake work.
+AI-assisted civil proposal compliance review using jurisdictional standards, site-specific
+geotechnical overrides, deterministic requirement comparison, and cited engineer-ready findings.
 
-The app now includes a standards-review API that compares proposal values against public
-city/client standards, then applies geotechnical or site-report requirements only when they are
-stricter than the city baseline.
+The application saves proposals before analysis, keeps every record and revision in company-scoped
+storage, and runs AI review only when an engineer selects **Analyze proposal**.
 
 ## Cheapest production setup
 
@@ -23,25 +23,18 @@ stricter than the city baseline.
 
 2. Create a free Supabase project.
 
-3. In Supabase, open the SQL editor and run:
+3. In Supabase, open the SQL editor and run these migrations in order:
 
-   ```sql
-   -- Paste the contents of supabase/schema.sql here.
-   ```
+   1. `supabase/schema.sql`
+   2. `supabase/usage-events.sql`
+   3. `supabase/engineering-documents.sql`
+   4. `supabase/proposals.sql`
+   5. `supabase/team.sql`
+   6. `supabase/durable-records.sql`
 
-   For an existing database that already has the review schema, run only
-   `supabase/usage-events.sql` to add usage logging.
-
-   Then run `supabase/engineering-documents.sql` to enable the authenticated
-   standards and site-document library. This migration creates the document
-   metadata/requirement store, indexes, and row-level security policies.
-
-   Run `supabase/proposals.sql` to enable the full proposal queue, assignment
-   workflow, section reviews, version metadata, dashboards, and saved compliance
-   results.
-
-   Run `supabase/team.sql` to enable reviewer assignment lists, company profiles,
-   team members, and invitation tracking.
+   The final migration adds company isolation, durable proposal history, private file storage,
+   archives, and the 50 MiB bucket limit. It is safe to rerun when applying updates because its
+   changes are idempotent.
 
 4. Copy `.env.example` to `.env.local` and add:
 
@@ -62,36 +55,52 @@ stricter than the city baseline.
 ## Deploy on Vercel
 
 1. Import `cadelubeck/city-form-reviewer` into Vercel.
-2. Add the same two Supabase environment variables in Vercel.
-3. Add `OPENAI_API_KEY` if you want AI reviewer notes. The API still returns rule-based findings
-   without it.
+2. Add all Supabase and OpenAI environment variables from the local setup to Vercel.
+3. Keep `OPENAI_API_KEY` server-side. Never prefix it with `NEXT_PUBLIC_`.
 4. Deploy.
 5. In Supabase Authentication settings, add your Vercel URL to the allowed redirect URLs.
 
-## Review API
+## End-to-end review workflow
 
-- `GET /api/reviews` confirms the API is live and returns the public source registry.
-- `POST /api/reviews` accepts proposal measurements and site/geotech findings, then returns
-  controlling requirements, findings, next actions, sources used, and optional AI notes.
+1. An authenticated user uploads a PDF or text proposal directly to the private Supabase bucket.
+2. The proposal record is saved as `pending`; upload does not invoke OpenAI.
+3. The engineer opens the saved record and selects **Analyze proposal**.
+4. Metadata selects applicable company standards and site reports by jurisdiction and client.
+5. The OpenAI Responses API runs a durable background review of every page, table, note, and
+   diagram and returns strict structured output with citations.
+6. The same pass extracts explicit submitted measurements and project scope.
+7. Normal software logic selects the city/client baseline and applies a site-specific requirement
+   only when it is deterministically comparable and stricter.
+8. The proposal receives saved page findings, the deterministic compliance table, and a
+   consolidated errors/missing/warnings panel.
+9. A licensed engineer reviews the evidence, changes status, adds notes, and makes the decision.
+10. Files, revisions, status, AI results, and history remain available for future reference.
 
-The current source registry includes Jones Civil public client references, Brigham City public
-standards, USGS seismic screening, FEMA flood mapping, and NRCS soils screening.
+`GET /api/reviews` is the health endpoint for the structured comparison service.
 
-## OpenAI-assisted compliance architecture
+## Architecture
 
-- The server uses the OpenAI Responses API with strict JSON Schema outputs.
-- Proposal and geotechnical/site-report text is converted into structured civil requirements.
-- Embeddings are generated for requirement-level semantic retrieval.
-- Reviews retrieve the current user’s matching sources by jurisdiction/client metadata,
-  then use exact metrics with embedding similarity as a controlled fallback.
-- The deterministic review engine—not the model—selects the controlling value.
-- City/client standards remain the baseline. A site source controls only when its value is
-  deterministically comparable and stricter.
-- Compatible inch/foot values are normalized. Incompatible units, comparators, or categorical
-  conflicts are sent to licensed-engineer review.
-- Every finding includes its controlling source, citation, optional page/excerpt, explanation,
-  and recommended correction.
-- AI narrative output is advisory and cannot approve a proposal.
+- **Document library:** company-scoped standards, manuals, geotechnical reports, environmental
+  reports, seismic sources, groundwater sources, flood sources, and soil sources.
+- **Parser and retrieval:** strict schema extraction, requirement embeddings, and jurisdiction,
+  client, project-type, and document-type metadata.
+- **Rules engine:** exact metric matching first, semantic similarity only as a controlled fallback,
+  compatible unit normalization, and deterministic stricter-of selection.
+- **AI review assistant:** page and diagram reading, structured extraction, citation matching,
+  summaries, and correction explanations. It never approves a proposal.
+- **Human review:** assignments, priorities, statuses, notes, highlights, source links, revision
+  history, archival retention, and manager dashboards.
+
+## Review performance
+
+- Deep reviews use OpenAI background mode so a server timeout does not discard the job.
+- The browser polls the durable job and can reconnect after navigation.
+- Embedding vectors are retained for software retrieval but removed from the model prompt. This
+  substantially reduces request size, token processing, latency, and cost without removing any
+  standard text, values, citations, or proposal content.
+- The model performs page review and submitted-value extraction in one pass; the rules engine then
+  performs the controlling comparison without another model request.
+- Re-running a review remains intentionally available, but ordinary uploads never spend AI tokens.
 
 ## Security notes
 
@@ -99,6 +108,9 @@ standards, USGS seismic screening, FEMA flood mapping, and NRCS soils screening.
 - Users can only read, create, update, and delete their own reviews.
 - Supabase Auth securely hashes passwords; the application never stores readable passwords.
 - API usage and account activity are recorded in `usage_events`, protected by row-level security.
+- Proposal records, standards, and private storage paths are isolated by company with row-level
+  security.
+- Interactive sessions are signed out after 24 hours.
 - The Profile tab shows each user only their own request totals and recent troubleshooting activity.
 - Supabase service-role keys must never be added to the browser or committed to Git.
 - Security headers are configured in `next.config.ts`.

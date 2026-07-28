@@ -261,6 +261,9 @@ function ProposalDetail({ proposal, user, headers, onBack, onNew, onUpdate, onRe
   const reviewJob = proposal.diagram_analysis as { responseId?: string; status?: string; startedAt?: string } | null;
   const reviewRunning = busy === "deep" || reviewJob?.status === "queued" || reviewJob?.status === "in_progress";
   const allFindings = proposal.page_reviews.flatMap((page) => page.findings.map((finding) => ({ ...finding, page: page.page })));
+  const globalMissingInformation = Array.isArray(proposal.diagram_analysis?.globalMissingInformation)
+    ? proposal.diagram_analysis.globalMissingInformation as string[]
+    : [];
 
   useEffect(() => {
     headers().then((auth) => apiFetch("/api/team", { headers: auth })).then((response) => response.json())
@@ -343,7 +346,16 @@ function ProposalDetail({ proposal, user, headers, onBack, onNew, onUpdate, onRe
         }
         if (!response.ok) return setMessage(data.error ?? "Deep document review failed.");
         const pages = data.data?.pages ?? [];
-        onReplace({ ...proposal, page_reviews: pages, diagram_analysis: data.data, status: "in_review" });
+        onReplace({
+          ...proposal,
+          page_reviews: pages,
+          diagram_analysis: data.data,
+          compliance_review: data.complianceReview ?? null,
+          detected_jurisdiction: data.data?.detectedJurisdiction ?? {},
+          project_scope: data.data?.projectScope ?? [],
+          extracted_requirements: data.extractedRequirements ?? [],
+          status: "in_review"
+        });
         setActivePage(pages[0]?.page ?? 1);
         setMessage(`Deep review complete: ${pages.length} page${pages.length === 1 ? "" : "s"} reviewed and saved.`);
         return;
@@ -419,7 +431,8 @@ function ProposalDetail({ proposal, user, headers, onBack, onNew, onUpdate, onRe
       <button className="soft-button" onClick={runCompliance} disabled={!!busy}><CheckCircle2 size={17} />{busy === "compliance" ? "Comparing…" : "Run structured standards comparison"}</button>
       <span>{proposal.project_scope.join(" · ") || "Scope not detected"}</span>
     </div>
-    {proposal.page_reviews?.length ? <ReviewTriage findings={allFindings} onOpenPage={setActivePage} /> : null}
+    {proposal.page_reviews?.length ? <ReviewTriage findings={allFindings} missingInformation={globalMissingInformation} onOpenPage={setActivePage} /> : null}
+    {proposal.compliance_review ? <ComplianceResults result={proposal.compliance_review} /> : null}
     {proposal.page_reviews?.length ? <nav className="page-review-nav" aria-label="Reviewed pages">
       {proposal.page_reviews.map((page) => <button className={page.page === activePage ? "active" : ""} key={page.page} onClick={() => setActivePage(page.page)}>
         <span>Page {page.page}</span><small>{page.findings.filter((item) => item.severity !== "pass").length} flags</small>
@@ -447,14 +460,13 @@ function ProposalDetail({ proposal, user, headers, onBack, onNew, onUpdate, onRe
         </> : null}
       </aside>
     </div>
-    {proposal.compliance_review ? <ComplianceResults result={proposal.compliance_review} /> : null}
-    {proposal.diagram_analysis ? <AnalysisPanel analysis={proposal.diagram_analysis} /> : null}
+    {proposal.diagram_analysis && proposal.page_reviews.length ? <AnalysisPanel analysis={proposal.diagram_analysis} /> : null}
     {versionModal ? <VersionModal proposal={proposal} headers={headers} busy={busy} onBusy={setBusy} onClose={() => setVersionModal(false)} onSelect={(index) => { setSelectedVersion(index); setVersionModal(false); }} onUpdated={(updated) => { onReplace(updated); setSelectedVersion(null); setVersionModal(false); }} /> : null}
   </section>;
 }
 
 function ReviewProgress({ status }: { status: string }) {
-  const active = status === "queued" ? 1 : 2;
+  const active = status === "queued" ? 0 : 1;
   const steps = ["Review requested", "Reading every page", "Organizing findings", "Engineer ready"];
   return <section className="review-progress" role="status" aria-live="polite">
     <div className="progress-heading"><strong>AI review in progress</strong><span>You can leave this proposal; the review continues safely.</span></div>
@@ -464,8 +476,9 @@ function ReviewProgress({ status }: { status: string }) {
   </section>;
 }
 
-function ReviewTriage({ findings, onOpenPage }: {
+function ReviewTriage({ findings, missingInformation, onOpenPage }: {
   findings: Array<PageReviewFinding & { page: number }>;
+  missingInformation: string[];
   onOpenPage: (page: number) => void;
 }) {
   const groups = [
@@ -475,10 +488,15 @@ function ReviewTriage({ findings, onOpenPage }: {
   ];
   return <section className="review-triage panel">
     <div className="panel-heading"><div><p className="eyebrow">Engineer quick review</p><h2>Errors, missing items, and warnings</h2></div>
-      <span className="triage-total">{groups.reduce((total, group) => total + group.items.length, 0)} decisions</span>
+      <span className="triage-total">{groups.reduce((total, group) => total + group.items.length, missingInformation.length)} decisions</span>
     </div>
-    <div className="triage-metrics">{groups.map((group) => <div className={`metric ${group.className}`} key={group.key}><span>{group.title}</span><strong>{group.items.length}</strong></div>)}</div>
-    <div className="triage-groups">{groups.map((group) => group.items.length ? <details open={group.key !== "warning"} key={group.key}>
+    <div className="triage-metrics">{groups.map((group) => <div className={`metric ${group.className}`} key={group.key}><span>{group.title}</span><strong>{group.items.length + (group.key === "missing" ? missingInformation.length : 0)}</strong></div>)}</div>
+    <div className="triage-groups">
+      {missingInformation.length ? <details open>
+        <summary>Missing project-wide information <span>{missingInformation.length}</span></summary>
+        <div>{missingInformation.map((item) => <p className="global-missing" key={item}>{item}</p>)}</div>
+      </details> : null}
+      {groups.map((group) => group.items.length ? <details open={group.key !== "warning"} key={group.key}>
       <summary>{group.title} <span>{group.items.length}</span></summary>
       <div>{group.items.map((finding) => <button key={`${finding.page}-${finding.id}`} onClick={() => onOpenPage(finding.page)}>
         <span>Page {finding.page}</span><strong>{finding.title}</strong><small>{finding.recommendedCorrection || finding.explanation}</small>

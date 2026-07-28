@@ -1333,6 +1333,14 @@ button:disabled {
   border-top: 1px solid #e2e8f0;
 }
 
+.global-missing {
+  margin: 0;
+  padding: 10px 12px;
+  border-bottom: 1px solid #f1f5f9;
+  color: #991b1b;
+  font-size: .75rem;
+}
+
 .triage-groups button {
   display: grid;
   grid-template-columns: 65px 1fr;
