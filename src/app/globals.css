@@ -1142,8 +1142,8 @@ button:disabled {
 .viewer-grid {
   --review-panel-height: max(860px, calc(100vh - 96px));
   display: grid;
-  grid-template-columns: minmax(620px, 2fr) minmax(340px, 1fr);
-  gap: 14px;
+  grid-template-columns: minmax(680px, 2.6fr) minmax(320px, 1fr);
+  gap: 10px;
   align-items: stretch;
 }
 
@@ -1155,6 +1155,11 @@ button:disabled {
 .document-viewer {
   display: flex;
   flex-direction: column;
+  padding: 12px;
+}
+
+.document-viewer > .panel-heading {
+  margin-bottom: 10px;
 }
 
 .section-sidebar {
@@ -1209,12 +1214,12 @@ button:disabled {
 
 .page-review-nav {
   display: flex;
-  gap: 4px;
-  margin: 0 0 14px;
-  padding: 6px;
+  gap: 2px;
+  margin: 0 0 10px;
+  padding: 3px;
   overflow-x: auto;
   border: 1px solid #e2e8f0;
-  border-radius: 12px;
+  border-radius: 8px;
   background: #fff;
 }
 
@@ -1385,11 +1390,13 @@ button:disabled {
   display: grid;
   flex: 0 0 auto;
   gap: 0;
-  min-width: 42px;
-  padding: 5px 7px;
+  min-width: 30px;
+  min-height: 30px;
+  padding: 2px 4px;
   border: 1px solid #e2e8f0;
   background: #f8fafc;
   color: #475569;
+  font-size: .67rem;
 }
 
 .page-review-nav button.active {
@@ -1399,7 +1406,7 @@ button:disabled {
 }
 
 .page-review-nav small {
-  font-size: .58rem;
+  font-size: .5rem;
   opacity: .75;
 }
 
@@ -1747,7 +1754,7 @@ button:disabled {
 
 @media (max-width: 1080px) {
   .viewer-grid {
-    grid-template-columns: minmax(500px, 1.5fr) minmax(320px, 1fr);
+    grid-template-columns: minmax(520px, 1.8fr) minmax(300px, 1fr);
   }
   .status-grid {
     grid-template-columns: repeat(3, 1fr);

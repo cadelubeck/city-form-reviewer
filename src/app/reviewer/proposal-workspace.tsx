@@ -551,7 +551,7 @@ function ProposalDetail({ proposal, user, headers, onBack, onNew, onUpdate, onRe
     <div className="viewer-grid">
       <section className="document-viewer panel"><div className="panel-heading"><div><p className="eyebrow">{viewedVersion ? `Archived ${viewedVersion.label}` : `Original form · Page ${activePage}`}</p><h2>{viewedFileName ?? section?.title ?? "Proposal"}</h2></div><button className="soft-button" onClick={addHighlight}>Highlight selection</button></div>
         {viewedFileUrl && viewedFileName?.toLowerCase().endsWith(".pdf")
-          ? <iframe key={`${selectedVersion}-${activePage}`} title={`${proposal.name}, page ${activePage}`} src={`${viewedFileUrl}#page=${activePage}&view=FitH`} />
+          ? <iframe key={`${selectedVersion}-${activePage}`} title={`${proposal.name}, page ${activePage}`} src={`${viewedFileUrl}#page=${activePage}&view=FitH&pagemode=none&zoom=page-width`} />
           : <pre>{sectionText || "No extractable text was returned."}</pre>}
       </section>
       <aside className="review-sidebar panel">
