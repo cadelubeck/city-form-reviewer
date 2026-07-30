@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { PDFDocument } from "pdf-lib";
 import {
   parseStructuredResponse,
   retrieveBackgroundResponse,
@@ -15,6 +16,10 @@ import type {
 export const maxDuration = 300;
 
 type StandardRequirement = Record<string, unknown>;
+type ReviewRecord = Record<string, unknown>;
+
+const DEEP_REVIEW_BATCH_SIZE = 3;
+const DEEP_REVIEW_MAX_OUTPUT_TOKENS = 48000;
 
 const sectionSchema = {
   type: "object",
@@ -185,6 +190,201 @@ function compactStandardsForModel(standards: StandardRequirement[]) {
   }));
 }
 
+async function proposalBatchInput(
+  auth: NonNullable<Awaited<ReturnType<typeof authenticatedSupabase>>>,
+  proposal: ReviewRecord,
+  requestedStartPage: number,
+  batchSize = DEEP_REVIEW_BATCH_SIZE
+) {
+  if (!proposal.file_path) {
+    return {
+      documentInput: { type: "input_text", text: String(proposal.text_content ?? "").slice(0, 180000) },
+      batchStart: 1,
+      batchEnd: 1,
+      totalPages: 1
+    };
+  }
+
+  const { data: file, error: fileError } = await auth.client.storage
+    .from("proposal-files").download(String(proposal.file_path));
+  if (fileError || !file) throw new Error(fileError?.message ?? "The original proposal file could not be loaded.");
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  const isPdf = String(proposal.original_name ?? "").toLowerCase().endsWith(".pdf") ||
+    file.type === "application/pdf";
+
+  if (!isPdf) {
+    return {
+      documentInput: {
+        type: "input_file",
+        filename: String(proposal.original_name ?? "proposal.txt"),
+        file_data: `data:${file.type || "text/plain"};base64,${Buffer.from(bytes).toString("base64")}`
+      },
+      batchStart: 1,
+      batchEnd: 1,
+      totalPages: 1
+    };
+  }
+
+  const source = await PDFDocument.load(bytes, { ignoreEncryption: true, updateMetadata: false });
+  const totalPages = source.getPageCount();
+  if (!totalPages) throw new Error("The uploaded PDF has no readable pages.");
+  const batchStart = Math.min(Math.max(1, requestedStartPage), totalPages);
+  const batchEnd = Math.min(batchStart + Math.max(1, batchSize) - 1, totalPages);
+  const batch = await PDFDocument.create();
+  const indexes = Array.from({ length: batchEnd - batchStart + 1 }, (_, index) => batchStart - 1 + index);
+  const copiedPages = await batch.copyPages(source, indexes);
+  copiedPages.forEach((page) => batch.addPage(page));
+  const batchBytes = await batch.save({ useObjectStreams: true });
+
+  return {
+    documentInput: {
+      type: "input_file",
+      filename: `proposal-pages-${batchStart}-${batchEnd}.pdf`,
+      file_data: `data:application/pdf;base64,${Buffer.from(batchBytes).toString("base64")}`
+    },
+    batchStart,
+    batchEnd,
+    totalPages
+  };
+}
+
+async function startDeepReviewBatch(
+  auth: NonNullable<Awaited<ReturnType<typeof authenticatedSupabase>>>,
+  proposal: ReviewRecord,
+  standards: StandardRequirement[],
+  requestedStartPage: number,
+  batchSize = DEEP_REVIEW_BATCH_SIZE
+) {
+  const batch = await proposalBatchInput(auth, proposal, requestedStartPage, batchSize);
+  const modelStandards = compactStandardsForModel(standards);
+  const result = await startBackgroundStructuredResponse({
+    name: "deep_civil_page_review",
+    schema: deepReviewSchema,
+    reasoningEffort: "high",
+    maxOutputTokens: DEEP_REVIEW_MAX_OUTPUT_TOKENS,
+    instructions: `You are an AI civil proposal review assistant, not the approving engineer.
+This request contains original proposal pages ${batch.batchStart}-${batch.batchEnd} of ${batch.totalPages}.
+Use the ORIGINAL page numbers ${batch.batchStart}-${batch.batchEnd} in every page and finding record.
+Return exactly one page record for each supplied page and no records for pages outside this batch.
+
+Inspect every supplied page, including every visible word, note, table, callout, plan, profile,
+detail, section, schedule, symbol, dimension, legend, stamp, and diagram. Do not infer unreadable values.
+
+Extract every explicit submitted civil-engineering value in this batch into extractedRequirements.
+Use stable snake_case metrics, original page numbers, preserved units, and brief evidence.
+
+Perform a complete technical audit, not a short list of general suggestions. For each page,
+describe the substantive content and visual information, then report every supported conflict,
+omission, ambiguity, coordination issue, and item requiring engineer judgment. Corrections must
+be specific and actionable. Do not collapse multiple distinct deficiencies into one generic item.
+
+Compare only against the supplied standards library. The city/client standard is the baseline;
+a site-specific requirement controls only when it is demonstrably stricter. Cite the proposal
+page and the exact standard title/page for every finding. standardId must exactly match a supplied
+requirement id, or null when no supplied standard supports the finding. Never invent a law, URL,
+page, requirement, or citation. When the library does not support a compliance conclusion, still
+record visible omissions or ambiguities as engineer-review and state that no controlling standard
+was supplied. Mark unreadable information explicitly and reserve engineering judgment for the
+licensed human reviewer.`,
+    input: [{
+      role: "user",
+      content: [
+        batch.documentInput,
+        {
+          type: "input_text",
+          text: `PROJECT
+Name: ${String(proposal.name ?? "")}
+Client: ${String(proposal.client ?? "")}
+Jurisdiction: ${String(proposal.location ?? "")}
+Known scope: ${(proposal.project_scope as string[] ?? []).join(", ")}
+CURRENT PAGE BATCH: ${batch.batchStart}-${batch.batchEnd} of ${batch.totalPages}
+
+CONTROLLING-STANDARD CANDIDATES (authoritative supplied library only)
+${JSON.stringify(modelStandards)}`
+        }
+      ]
+    }]
+  });
+  return { ...batch, result };
+}
+
+function mergeUnique<T>(items: T[], key: (item: T) => string) {
+  return Array.from(new Map(items.map((item) => [key(item), item])).values());
+}
+
+function mergeBatchReview(job: ReviewRecord, batchReview: ReviewRecord) {
+  const pages = mergeUnique(
+    [
+      ...((job.accumulatedPages as ReviewRecord[]) ?? []),
+      ...((batchReview.pages as ReviewRecord[]) ?? [])
+    ],
+    (page) => String(page.page ?? "")
+  ).sort((a, b) => Number(a.page ?? 0) - Number(b.page ?? 0));
+  const extractedRequirements = mergeUnique(
+    [
+      ...((job.accumulatedRequirements as ReviewRecord[]) ?? []),
+      ...((batchReview.extractedRequirements as ReviewRecord[]) ?? [])
+    ],
+    (item) => `${item.metric ?? ""}|${item.page ?? ""}|${item.excerpt ?? ""}`
+  );
+  const globalMissingInformation = Array.from(new Set([
+    ...((job.globalMissingInformation as string[]) ?? []),
+    ...((batchReview.globalMissingInformation as string[]) ?? [])
+  ]));
+  const projectScope = Array.from(new Set([
+    ...((job.projectScope as string[]) ?? []),
+    ...((batchReview.projectScope as string[]) ?? [])
+  ]));
+  const executiveSummaries = [
+    ...((job.executiveSummaries as string[]) ?? []),
+    String(batchReview.executiveSummary ?? "")
+  ].filter(Boolean);
+  const complianceValues = [
+    ...((job.complianceValues as string[]) ?? []),
+    String(batchReview.overallCompliance ?? "yellow")
+  ];
+  const overallCompliance = complianceValues.includes("red")
+    ? "red"
+    : complianceValues.includes("yellow") ? "yellow" : "green";
+
+  return {
+    pages,
+    extractedRequirements,
+    globalMissingInformation,
+    projectScope,
+    executiveSummaries,
+    complianceValues,
+    overallCompliance,
+    detectedJurisdiction: job.detectedJurisdiction ?? batchReview.detectedJurisdiction ?? {}
+  };
+}
+
+function normalizeBatchPageNumbers(review: ReviewRecord, batchStart: number, batchEnd: number) {
+  const expectedCount = batchEnd - batchStart + 1;
+  const pages = ((review.pages as ReviewRecord[]) ?? []).slice(0, expectedCount).map((page, index) => {
+    const originalPage = batchStart + index;
+    return {
+      ...page,
+      page: originalPage,
+      findings: ((page.findings as ReviewRecord[]) ?? []).map((finding) => ({
+        ...finding,
+        proposalPage: originalPage
+      }))
+    };
+  });
+  return {
+    ...review,
+    pages,
+    extractedRequirements: ((review.extractedRequirements as ReviewRecord[]) ?? []).map((item) => {
+      const reportedPage = Number(item.page);
+      const page = reportedPage >= batchStart && reportedPage <= batchEnd
+        ? reportedPage
+        : batchStart;
+      return { ...item, page };
+    })
+  };
+}
+
 function deterministicReview(
   proposal: Record<string, unknown>,
   review: Record<string, unknown>,
@@ -265,22 +465,61 @@ export async function GET(request: Request) {
   try {
     const proposalId = new URL(request.url).searchParams.get("proposalId") ?? "";
     const { proposal, standards } = await loadProposalAndStandards(auth, proposalId);
-    const job = proposal.diagram_analysis as { responseId?: string; status?: string } | null;
+    const job = proposal.diagram_analysis as ReviewRecord | null;
     if (!job?.responseId) {
       return NextResponse.json({ error: "No deep review is currently running." }, { status: 404 });
     }
-    const response = await retrieveBackgroundResponse(job.responseId);
+    const response = await retrieveBackgroundResponse(String(job.responseId));
     if (response.status === "queued" || response.status === "in_progress") {
-      return NextResponse.json({ status: response.status, responseId: response.id }, { status: 202 });
+      return NextResponse.json({
+        status: response.status,
+        responseId: response.id,
+        completedPages: Number(job.completedPages ?? 0),
+        totalPages: Number(job.totalPages ?? 0),
+        batchStart: Number(job.batchStart ?? 1),
+        batchEnd: Number(job.batchEnd ?? 1)
+      }, { status: 202 });
     }
     if (response.status !== "completed") {
       const incompleteReason = response.incomplete_details?.reason;
+      const failedBatchStart = Number(job.batchStart ?? 1);
+      const failedBatchEnd = Number(job.batchEnd ?? failedBatchStart);
+      if (
+        response.status === "incomplete" &&
+        incompleteReason === "max_tokens" &&
+        failedBatchEnd > failedBatchStart
+      ) {
+        const retry = await startDeepReviewBatch(auth, proposal, standards, failedBatchStart, 1);
+        const retryJob = {
+          ...job,
+          responseId: retry.result.id,
+          status: retry.result.status ?? "queued",
+          batchStart: retry.batchStart,
+          batchEnd: retry.batchEnd,
+          updatedAt: new Date().toISOString(),
+          retryMode: "single-page"
+        };
+        const { error: retryError } = await auth.client.from("proposals").update({
+          diagram_analysis: retryJob
+        }).eq("id", proposalId);
+        if (retryError) throw new Error(retryError.message);
+        return NextResponse.json({
+          status: retry.result.status ?? "queued",
+          responseId: retry.result.id,
+          completedPages: Number(job.completedPages ?? 0),
+          totalPages: Number(job.totalPages ?? retry.totalPages),
+          batchStart: retry.batchStart,
+          batchEnd: retry.batchEnd,
+          retryMode: "single-page"
+        }, { status: 202 });
+      }
       const message = response.error?.message ??
         (response.status === "incomplete" && incompleteReason === "max_tokens"
-          ? "The previous review reached its output limit before the complete report was assembled. Re-analyze with the expanded review capacity."
+          ? "A single-page review reached the model output limit and requires engineer review."
           : `Deep review ended with status ${response.status ?? "unknown"}${incompleteReason ? ` (${incompleteReason})` : ""}.`);
       await auth.client.from("proposals").update({
         diagram_analysis: {
+          ...job,
           responseId: response.id,
           status: response.status ?? "failed",
           incompleteReason: incompleteReason ?? null,
@@ -289,10 +528,66 @@ export async function GET(request: Request) {
       }).eq("id", proposalId);
       return NextResponse.json({ error: message, status: response.status }, { status: 500 });
     }
-    const review = enrichReview(parseStructuredResponse<Record<string, unknown>>(response), standards);
-    const pages = review.pages as Array<Record<string, unknown>>;
+    const batchStart = Number(job.batchStart ?? 1);
+    const batchEnd = Number(job.batchEnd ?? batchStart);
+    const totalPages = Number(job.totalPages ?? batchEnd);
+    const parsedBatch = normalizeBatchPageNumbers(
+      parseStructuredResponse<ReviewRecord>(response),
+      batchStart,
+      batchEnd
+    );
+    const batchReview = enrichReview(parsedBatch, standards);
+    const merged = mergeBatchReview(job, batchReview);
+    const nextStart = batchEnd + 1;
+
+    if (nextStart <= totalPages) {
+      const next = await startDeepReviewBatch(auth, proposal, standards, nextStart);
+      const nextJob: ReviewRecord = {
+        responseId: next.result.id,
+        status: next.result.status ?? "queued",
+        startedAt: job.startedAt ?? new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        batchStart: next.batchStart,
+        batchEnd: next.batchEnd,
+        totalPages,
+        completedPages: batchEnd,
+        accumulatedPages: merged.pages,
+        accumulatedRequirements: merged.extractedRequirements,
+        globalMissingInformation: merged.globalMissingInformation,
+        projectScope: merged.projectScope,
+        executiveSummaries: merged.executiveSummaries,
+        complianceValues: merged.complianceValues,
+        detectedJurisdiction: merged.detectedJurisdiction
+      };
+      const { error: nextError } = await auth.client.from("proposals").update({
+        diagram_analysis: nextJob,
+        page_reviews: merged.pages,
+        status: "in_review"
+      }).eq("id", proposalId);
+      if (nextError) throw new Error(nextError.message);
+      return NextResponse.json({
+        status: next.result.status ?? "queued",
+        responseId: next.result.id,
+        completedPages: batchEnd,
+        totalPages,
+        batchStart: next.batchStart,
+        batchEnd: next.batchEnd,
+        pages: merged.pages
+      }, { status: 202 });
+    }
+
+    const review: ReviewRecord = {
+      overallCompliance: merged.overallCompliance,
+      executiveSummary: merged.executiveSummaries.join("\n\n"),
+      detectedJurisdiction: merged.detectedJurisdiction,
+      projectScope: merged.projectScope,
+      extractedRequirements: merged.extractedRequirements,
+      pages: merged.pages,
+      globalMissingInformation: merged.globalMissingInformation
+    };
+    const pages = merged.pages;
     const complianceReview = deterministicReview(proposal, review, standards);
-    const extractedRequirements = review.extractedRequirements as Array<Record<string, unknown>> ?? [];
+    const extractedRequirements = merged.extractedRequirements;
     const { error: updateError } = await auth.client.from("proposals").update({
       page_reviews: pages,
       diagram_analysis: review,
@@ -318,7 +613,9 @@ export async function GET(request: Request) {
       complianceReview,
       extractedRequirements,
       responseId: response.id,
-      model: response.model
+      model: response.model,
+      completedPages: totalPages,
+      totalPages
     });
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : "Unable to check review status." }, { status: 500 });
@@ -334,66 +631,22 @@ export async function POST(request: Request) {
     if (mode === "deep") {
       const proposalId = String(body.proposalId ?? "");
       const { proposal, standards } = await loadProposalAndStandards(auth, proposalId);
-
-      let documentInput: Record<string, unknown>;
-      if (proposal.file_path) {
-        const { data: file, error: fileError } = await auth.client.storage
-          .from("proposal-files").download(proposal.file_path);
-        if (fileError || !file) throw new Error(fileError?.message ?? "The original proposal file could not be loaded.");
-        documentInput = {
-          type: "input_file",
-          filename: proposal.original_name ?? "proposal.pdf",
-          file_data: `data:${file.type || "application/pdf"};base64,${Buffer.from(await file.arrayBuffer()).toString("base64")}`
-        };
-      } else {
-        documentInput = { type: "input_text", text: String(proposal.text_content ?? "").slice(0, 180000) };
-      }
-      const modelStandards = compactStandardsForModel(standards);
-      const result = await startBackgroundStructuredResponse({
-        name: "deep_civil_page_review",
-        schema: deepReviewSchema,
-        reasoningEffort: "high",
-        maxOutputTokens: 128000,
-        instructions: `You are an AI civil proposal review assistant, not the approving engineer.
-Inspect every page in order, including every visible word, note, table, callout, plan, profile,
-detail, section, schedule, symbol, dimension, legend, stamp, and diagram. Return one page record
-for every page, even if it has no deficiency. Do not infer unreadable values.
-
-Also extract every explicit submitted civil-engineering value once into extractedRequirements.
-Use stable snake_case metrics, supported page numbers, preserved units, and brief evidence.
-
-Perform a complete technical audit, not a short list of general suggestions. For each page,
-describe the substantive content and visual information, then report every supported conflict,
-omission, ambiguity, coordination issue, and item requiring engineer judgment. Corrections must
-be specific and actionable. Do not collapse multiple distinct deficiencies into one generic item.
-
-Compare only against the supplied standards library. The city/client standard is the baseline;
-a site-specific requirement controls only when it is demonstrably stricter. Cite the proposal
-page and the exact standard title/page for every finding. standardId must exactly match a supplied
-requirement id, or null when no supplied standard supports the finding. Never invent a law, URL,
-page, requirement, or citation. When the library does not support a compliance conclusion, still
-record visible omissions or ambiguities as engineer-review and state that no controlling standard
-was supplied. Mark unreadable information explicitly and reserve engineering judgment for the
-licensed human reviewer.`,
-        input: [{
-          role: "user",
-          content: [
-            documentInput,
-            {
-              type: "input_text",
-              text: `PROJECT\nName: ${proposal.name}\nClient: ${proposal.client}\nJurisdiction: ${proposal.location}\nScope: ${(proposal.project_scope ?? []).join(", ")}
-
-CONTROLLING-STANDARD CANDIDATES (authoritative supplied library only)
-${JSON.stringify(modelStandards)}`
-            }
-          ]
-        }]
-      });
+      const batch = await startDeepReviewBatch(auth, proposal, standards, 1);
       const { error: updateError } = await auth.client.from("proposals").update({
         diagram_analysis: {
-          responseId: result.id,
-          status: result.status ?? "queued",
-          startedAt: new Date().toISOString()
+          responseId: batch.result.id,
+          status: batch.result.status ?? "queued",
+          startedAt: new Date().toISOString(),
+          batchStart: batch.batchStart,
+          batchEnd: batch.batchEnd,
+          totalPages: batch.totalPages,
+          completedPages: 0,
+          accumulatedPages: [],
+          accumulatedRequirements: [],
+          globalMissingInformation: [],
+          projectScope: [],
+          executiveSummaries: [],
+          complianceValues: []
         },
         status: "in_review"
       }).eq("id", proposalId);
@@ -404,13 +657,23 @@ ${JSON.stringify(modelStandards)}`
         actor_id: auth.user.id,
         event_type: "deep_review_started",
         status: "in_review",
-        summary: "Started a durable page-by-page AI review.",
-        snapshot: { responseId: result.id, status: result.status ?? "queued" }
+        summary: `Started a durable ${DEEP_REVIEW_BATCH_SIZE}-page batch AI review for ${batch.totalPages} pages.`,
+        snapshot: {
+          responseId: batch.result.id,
+          status: batch.result.status ?? "queued",
+          batchStart: batch.batchStart,
+          batchEnd: batch.batchEnd,
+          totalPages: batch.totalPages
+        }
       });
       return NextResponse.json({
-        status: result.status ?? "queued",
-        responseId: result.id,
-        model: result.model
+        status: batch.result.status ?? "queued",
+        responseId: batch.result.id,
+        model: batch.result.model,
+        completedPages: 0,
+        totalPages: batch.totalPages,
+        batchStart: batch.batchStart,
+        batchEnd: batch.batchEnd
       }, { status: 202 });
     }
     const text = String(body.text ?? "").slice(0, 90000);

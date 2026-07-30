@@ -247,6 +247,9 @@ function ProposalDetail({ proposal, user, headers, onBack, onNew, onUpdate, onRe
   const [selectedVersion, setSelectedVersion] = useState<number | null>(null);
   const [statute, setStatute] = useState({ title: "", url: "", relevance: "", jurisdiction: "" });
   const [activePage, setActivePage] = useState(proposal.page_reviews?.[0]?.page ?? 1);
+  const [reviewProgress, setReviewProgress] = useState<{
+    completedPages: number; totalPages: number; batchStart: number; batchEnd: number;
+  } | null>(null);
   const section = proposal.sections.find((item) => item.id === sectionId);
   const viewedVersion = selectedVersion === null ? null : proposal.versions[selectedVersion];
   const viewedText = viewedVersion?.text_content ?? proposal.text_content;
@@ -258,7 +261,15 @@ function ProposalDetail({ proposal, user, headers, onBack, onNew, onUpdate, onRe
     ? lines.slice(section.startLine, proposal.sections[sectionIndex + 1]?.startLine ?? lines.length).join("\n")
     : viewedText;
   const pageReview = proposal.page_reviews?.find((item) => item.page === activePage);
-  const reviewJob = proposal.diagram_analysis as { responseId?: string; status?: string; startedAt?: string } | null;
+  const reviewJob = proposal.diagram_analysis as {
+    responseId?: string;
+    status?: string;
+    startedAt?: string;
+    completedPages?: number;
+    totalPages?: number;
+    batchStart?: number;
+    batchEnd?: number;
+  } | null;
   const reviewRunning = busy === "deep" || reviewJob?.status === "queued" || reviewJob?.status === "in_progress";
   const allFindings = proposal.page_reviews.flatMap((page) => page.findings.map((finding) => ({ ...finding, page: page.page })));
   const globalMissingInformation = Array.isArray(proposal.diagram_analysis?.globalMissingInformation)
@@ -327,11 +338,17 @@ function ProposalDetail({ proposal, user, headers, onBack, onNew, onUpdate, onRe
         }, 75_000);
         const started = await start.json().catch(() => ({ error: "The AI response could not be read." }));
         if (!start.ok) return setMessage(started.error ?? "Deep document review failed.");
+        setReviewProgress({
+          completedPages: started.completedPages ?? 0,
+          totalPages: started.totalPages ?? 0,
+          batchStart: started.batchStart ?? 1,
+          batchEnd: started.batchEnd ?? 1
+        });
       } else {
         setMessage("Reconnected to the saved background review. Checking for completed results…");
       }
 
-      const deadline = Date.now() + 9 * 60_000;
+      const deadline = Date.now() + 45 * 60_000;
       while (Date.now() < deadline) {
         await new Promise((resolve) => setTimeout(resolve, 4_000));
         const response = await apiFetch(
@@ -341,7 +358,29 @@ function ProposalDetail({ proposal, user, headers, onBack, onNew, onUpdate, onRe
         );
         const data = await response.json().catch(() => ({ error: "The AI response could not be read." }));
         if (response.status === 202) {
-          setMessage("Deep review is running safely in the background. You can keep this page open while results are collected.");
+          const progress = {
+            completedPages: data.completedPages ?? 0,
+            totalPages: data.totalPages ?? 0,
+            batchStart: data.batchStart ?? 1,
+            batchEnd: data.batchEnd ?? 1
+          };
+          setReviewProgress(progress);
+          if (Array.isArray(data.pages) && data.pages.length) {
+            onReplace({
+              ...proposal,
+              page_reviews: data.pages,
+              diagram_analysis: {
+                ...(proposal.diagram_analysis ?? {}),
+                responseId: data.responseId,
+                status: data.status,
+                ...progress
+              },
+              status: "in_review"
+            });
+          }
+          setMessage(data.retryMode === "single-page"
+            ? `${progress.completedPages} of ${progress.totalPages} pages saved. A dense batch is being retried one page at a time.`
+            : `${progress.completedPages} of ${progress.totalPages} pages saved. Now reviewing pages ${progress.batchStart}-${progress.batchEnd}.`);
           continue;
         }
         if (!response.ok) return setMessage(data.error ?? "Deep document review failed.");
@@ -357,6 +396,12 @@ function ProposalDetail({ proposal, user, headers, onBack, onNew, onUpdate, onRe
           status: "in_review"
         });
         setActivePage(pages[0]?.page ?? 1);
+        setReviewProgress({
+          completedPages: data.completedPages ?? pages.length,
+          totalPages: data.totalPages ?? pages.length,
+          batchStart: data.totalPages ?? pages.length,
+          batchEnd: data.totalPages ?? pages.length
+        });
         setMessage(`Deep review complete: ${pages.length} page${pages.length === 1 ? "" : "s"} reviewed and saved.`);
         return;
       }
@@ -419,7 +464,13 @@ function ProposalDetail({ proposal, user, headers, onBack, onNew, onUpdate, onRe
         ? <button className="soft-button" onClick={() => onUpdate({ id: proposal.id, archived_at: null })}><RefreshCw size={16} />Restore</button>
         : <button className="delete-button" onClick={onDelete} title="Archive proposal"><Trash2 size={16} /></button>}
     </div>
-    {reviewRunning ? <ReviewProgress status={reviewJob?.status ?? "in_progress"} /> : null}
+    {reviewRunning ? <ReviewProgress
+      status={reviewJob?.status ?? "in_progress"}
+      completedPages={reviewProgress?.completedPages ?? Number(reviewJob?.completedPages ?? 0)}
+      totalPages={reviewProgress?.totalPages ?? Number(reviewJob?.totalPages ?? 0)}
+      batchStart={reviewProgress?.batchStart ?? Number(reviewJob?.batchStart ?? 1)}
+      batchEnd={reviewProgress?.batchEnd ?? Number(reviewJob?.batchEnd ?? 1)}
+    /> : null}
     {message ? <p className="message">{message}</p> : null}
     <div className="detail-actions">
       <button className="primary" onClick={runDeepReview} disabled={!!busy}><FileSearch size={17} />{busy === "deep"
@@ -465,11 +516,18 @@ function ProposalDetail({ proposal, user, headers, onBack, onNew, onUpdate, onRe
   </section>;
 }
 
-function ReviewProgress({ status }: { status: string }) {
-  const active = status === "queued" ? 0 : 1;
-  const steps = ["Review requested", "Reading every page", "Organizing findings", "Engineer ready"];
+function ReviewProgress({ status, completedPages, totalPages, batchStart, batchEnd }: {
+  status: string;
+  completedPages: number;
+  totalPages: number;
+  batchStart: number;
+  batchEnd: number;
+}) {
+  const percent = totalPages ? Math.min(100, Math.round((completedPages / totalPages) * 100)) : 0;
+  const active = status === "queued" && completedPages === 0 ? 0 : 1;
+  const steps = ["Review requested", `Reading pages ${batchStart}-${batchEnd}`, `${completedPages}/${totalPages || "?"} pages saved`, "Engineer ready"];
   return <section className="review-progress" role="status" aria-live="polite">
-    <div className="progress-heading"><strong>AI review in progress</strong><span>You can leave this proposal; the review continues safely.</span></div>
+    <div className="progress-heading"><strong>AI review in progress · {percent}%</strong><span>Results save every three pages. You can leave and return safely.</span></div>
     <div className="progress-track">{steps.map((step, index) => <div className={index <= active ? "active" : ""} key={step}>
       <i>{index < active ? "✓" : index + 1}</i><span>{step}</span>
     </div>)}</div>
