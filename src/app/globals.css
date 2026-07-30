@@ -1455,6 +1455,24 @@ button:disabled {
   line-height: 1.55;
 }
 
+.analysis-description {
+  width: 100%;
+  text-align: left;
+}
+
+.analysis-description summary {
+  cursor: pointer;
+  color: #4338ca;
+  font-size: .72rem;
+  font-weight: 800;
+  text-align: center;
+}
+
+.analysis-description p {
+  margin-top: 9px;
+  text-align: center;
+}
+
 .page-review,
 .page-findings {
   display: grid;
@@ -1701,6 +1719,39 @@ button:disabled {
 .compliance-results,
 .analysis-panel {
   margin-top: 16px;
+}
+
+.analysis-panel > summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.analysis-panel > summary::-webkit-details-marker {
+  display: none;
+}
+
+.analysis-panel > summary > span:first-child {
+  display: grid;
+  gap: 4px;
+}
+
+.analysis-panel > summary strong {
+  color: #0f172a;
+  font-size: 1.15rem;
+}
+
+.collapse-label {
+  color: #6366f1;
+  font-size: .7rem;
+  font-weight: 800;
+}
+
+.analysis-panel-content {
+  margin-top: 18px;
 }
 
 .dashboard-heading {

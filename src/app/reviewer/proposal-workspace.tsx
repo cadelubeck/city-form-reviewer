@@ -556,7 +556,7 @@ function ProposalDetail({ proposal, user, headers, onBack, onNew, onUpdate, onRe
       </section>
       <aside className="review-sidebar panel">
         <div className="panel-heading"><div><p className="eyebrow">AI + engineer review</p><h2>{pageReview ? `Page ${pageReview.page}: ${pageReview.pageTitle}` : section?.title ?? "Select a section"}</h2></div></div>
-        {pageReview ? <PageReview page={pageReview} /> : <div className="deep-review-empty"><FileSearch size={24} /><strong>Run the deep page review</strong><p>The AI will inspect all visible text, tables, diagrams, dimensions, and notes, then organize cited findings beside each proposal page.</p></div>}
+        {pageReview ? <PageReview page={pageReview} /> : <div className="deep-review-empty"><FileSearch size={24} /><strong>Run the deep page review</strong><details className="analysis-description" open><summary>What Analyze proposal reviews</summary><p>The AI will inspect all visible text, tables, diagrams, dimensions, and notes, then organize cited findings beside each proposal page.</p></details></div>}
         {proposal.sections.length > 1 ? <label>Manual review section<select value={sectionId} onChange={(e) => setSectionId(e.target.value)}>{proposal.sections.map((item) => <option value={item.id} key={item.id}>{item.title}</option>)}</select></label> : null}
         {section ? <>
           <label>Section disposition<select value={section.score} onChange={(e) => updateSection({ score: e.target.value as ProposalSection["score"] })}><option value="green">Pass / no concern</option><option value="yellow">Needs review</option><option value="red">Deficiency</option></select></label>
@@ -712,7 +712,10 @@ function ComplianceResults({ result }: { result: ReviewResult }) {
 
 function AnalysisPanel({ analysis }: { analysis: Record<string, unknown> }) {
   const diagrams = Array.isArray(analysis.diagrams) ? analysis.diagrams as Array<Record<string, unknown>> : [];
-  return <section className="panel analysis-panel"><p className="eyebrow">Plan intelligence</p><h2>Document and diagram analysis</h2><p>{String(analysis.summary ?? "")}</p>{diagrams.map((item, index) => <article className="review-card" key={index}><strong>{String(item.title ?? "Diagram")}</strong><p>{(item.concerns as string[] ?? []).join(" · ") || "No explicit concern identified."}</p></article>)}</section>;
+  return <details className="panel analysis-panel" open>
+    <summary><span><small className="eyebrow">Plan intelligence</small><strong>Document and diagram analysis</strong></span><span className="collapse-label">Show / hide</span></summary>
+    <div className="analysis-panel-content"><p>{String(analysis.summary ?? "")}</p>{diagrams.map((item, index) => <article className="review-card" key={index}><strong>{String(item.title ?? "Diagram")}</strong><p>{(item.concerns as string[] ?? []).join(" · ") || "No explicit concern identified."}</p></article>)}</div>
+  </details>;
 }
 
 function ProposalDashboard({ proposals, onOpen, onRefresh }: { proposals: Proposal[]; onOpen: (proposal: Proposal) => void; onRefresh: () => void }) {
