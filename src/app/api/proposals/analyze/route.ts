@@ -274,9 +274,18 @@ export async function GET(request: Request) {
       return NextResponse.json({ status: response.status, responseId: response.id }, { status: 202 });
     }
     if (response.status !== "completed") {
-      const message = response.error?.message ?? `Deep review ended with status ${response.status ?? "unknown"}.`;
+      const incompleteReason = response.incomplete_details?.reason;
+      const message = response.error?.message ??
+        (response.status === "incomplete" && incompleteReason === "max_tokens"
+          ? "The previous review reached its output limit before the complete report was assembled. Re-analyze with the expanded review capacity."
+          : `Deep review ended with status ${response.status ?? "unknown"}${incompleteReason ? ` (${incompleteReason})` : ""}.`);
       await auth.client.from("proposals").update({
-        diagram_analysis: { responseId: response.id, status: response.status ?? "failed", error: message }
+        diagram_analysis: {
+          responseId: response.id,
+          status: response.status ?? "failed",
+          incompleteReason: incompleteReason ?? null,
+          error: message
+        }
       }).eq("id", proposalId);
       return NextResponse.json({ error: message, status: response.status }, { status: 500 });
     }
@@ -344,7 +353,7 @@ export async function POST(request: Request) {
         name: "deep_civil_page_review",
         schema: deepReviewSchema,
         reasoningEffort: "high",
-        maxOutputTokens: 16000,
+        maxOutputTokens: 128000,
         instructions: `You are an AI civil proposal review assistant, not the approving engineer.
 Inspect every page in order, including every visible word, note, table, callout, plan, profile,
 detail, section, schedule, symbol, dimension, legend, stamp, and diagram. Return one page record

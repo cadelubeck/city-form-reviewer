@@ -24,6 +24,7 @@ export type BackgroundResponse = {
   model?: string;
   status?: string;
   error?: { message?: string } | null;
+  incomplete_details?: { reason?: string } | null;
   output_text?: string;
   output?: Array<{ content?: Array<{ type?: string; text?: string }> }>;
 };
