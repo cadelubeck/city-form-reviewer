@@ -432,7 +432,6 @@ function ProposalDetail({ proposal, user, headers, onBack, onNew, onUpdate, onRe
       <span>{proposal.project_scope.join(" · ") || "Scope not detected"}</span>
     </div>
     {proposal.page_reviews?.length ? <ReviewTriage findings={allFindings} missingInformation={globalMissingInformation} onOpenPage={setActivePage} /> : null}
-    {proposal.compliance_review ? <ComplianceResults result={proposal.compliance_review} /> : null}
     {proposal.page_reviews?.length ? <nav className="page-review-nav" aria-label="Reviewed pages">
       {proposal.page_reviews.map((page) => <button className={page.page === activePage ? "active" : ""} key={page.page} onClick={() => setActivePage(page.page)}>
         <span>Page {page.page}</span><small>{page.findings.filter((item) => item.severity !== "pass").length} flags</small>
@@ -451,7 +450,7 @@ function ProposalDetail({ proposal, user, headers, onBack, onNew, onUpdate, onRe
         {section ? <>
           <label>Section disposition<select value={section.score} onChange={(e) => updateSection({ score: e.target.value as ProposalSection["score"] })}><option value="green">Pass / no concern</option><option value="yellow">Needs review</option><option value="red">Deficiency</option></select></label>
           <label>Review notes<textarea value={section.notes} onChange={(e) => updateSection({ notes: e.target.value })} placeholder="Concerns, corrections, and engineer notes…" /></label>
-          <button className="primary" onClick={analyzeSection} disabled={!!busy}><Sparkles size={17} />{busy === "section" ? "Analyzing…" : section.aiReview ? "Re-run AI section review" : "Run AI section review"}</button>
+          <button className="soft-button" onClick={analyzeSection} disabled={!!busy}><Sparkles size={17} />{busy === "section" ? "Checking section…" : section.aiReview ? "Refresh quick section suggestions" : "Quick section suggestions"}</button>
           {section.aiReview ? <div className="ai-section-result"><strong>{section.aiReview.summary}</strong>{section.aiReview.concerns.map((item) => <p key={item}>⚠ {item}</p>)}{section.aiReview.recommendations.map((item) => <p key={item}>→ {item}</p>)}</div> : null}
           <div className="review-subsection"><strong>Highlights</strong>{proposal.highlights.filter((item) => item.sectionId === sectionId).map((item) => <article className="highlight-card" key={item.id}><q>{item.text}</q>{item.note ? <p>{item.note}</p> : null}<button onClick={() => onUpdate({ id: proposal.id, highlights: proposal.highlights.filter((entry) => entry.id !== item.id) })}>Remove</button></article>)}</div>
           <div className="review-subsection"><strong>References and statutes</strong>{(section.statutes ?? []).map((item) => <article className="statute-card" key={item.id}><a href={item.url || undefined} target="_blank" rel="noreferrer">{item.title}</a><small>{item.jurisdiction} · {item.relevance}</small><button onClick={() => updateSection({ statutes: section.statutes?.filter((entry) => entry.id !== item.id) })}>Remove</button></article>)}
@@ -461,6 +460,7 @@ function ProposalDetail({ proposal, user, headers, onBack, onNew, onUpdate, onRe
       </aside>
     </div>
     {proposal.diagram_analysis && proposal.page_reviews.length ? <AnalysisPanel analysis={proposal.diagram_analysis} /> : null}
+    {proposal.compliance_review ? <ComplianceResults result={proposal.compliance_review} /> : null}
     {versionModal ? <VersionModal proposal={proposal} headers={headers} busy={busy} onBusy={setBusy} onClose={() => setVersionModal(false)} onSelect={(index) => { setSelectedVersion(index); setVersionModal(false); }} onUpdated={(updated) => { onReplace(updated); setSelectedVersion(null); setVersionModal(false); }} /> : null}
   </section>;
 }

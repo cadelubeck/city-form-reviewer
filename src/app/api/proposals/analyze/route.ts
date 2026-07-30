@@ -171,12 +171,15 @@ function compactStandardsForModel(standards: StandardRequirement[]) {
     id: requirement.id,
     topic: requirement.topic,
     metric: requirement.metric,
+    description: requirement.description,
+    rationale: requirement.rationale,
     comparator: requirement.comparator,
     value: requirement.value,
     unit: requirement.unit,
     sourceTitle: requirement.documentTitle ?? requirement.sourceTitle,
     page: requirement.page,
-    citation: requirement.citation ?? requirement.excerpt,
+    citation: requirement.citation,
+    excerpt: requirement.excerpt,
     sourceUrl: requirement.sourceUrl,
     documentType: requirement.documentType
   }));
@@ -350,12 +353,19 @@ for every page, even if it has no deficiency. Do not infer unreadable values.
 Also extract every explicit submitted civil-engineering value once into extractedRequirements.
 Use stable snake_case metrics, supported page numbers, preserved units, and brief evidence.
 
+Perform a complete technical audit, not a short list of general suggestions. For each page,
+describe the substantive content and visual information, then report every supported conflict,
+omission, ambiguity, coordination issue, and item requiring engineer judgment. Corrections must
+be specific and actionable. Do not collapse multiple distinct deficiencies into one generic item.
+
 Compare only against the supplied standards library. The city/client standard is the baseline;
 a site-specific requirement controls only when it is demonstrably stricter. Cite the proposal
 page and the exact standard title/page for every finding. standardId must exactly match a supplied
 requirement id, or null when no supplied standard supports the finding. Never invent a law, URL,
-page, requirement, or citation. Mark missing or ambiguous information explicitly and reserve
-engineering judgment for the licensed human reviewer.`,
+page, requirement, or citation. When the library does not support a compliance conclusion, still
+record visible omissions or ambiguities as engineer-review and state that no controlling standard
+was supplied. Mark unreadable information explicitly and reserve engineering judgment for the
+licensed human reviewer.`,
         input: [{
           role: "user",
           content: [
