@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { User } from "@supabase/supabase-js";
 import {
   AlertTriangle, BarChart3, CheckCircle2, ChevronLeft, FileSearch, Filter,
@@ -270,6 +270,7 @@ function ProposalDetail({ proposal, user, headers, onBack, onNew, onUpdate, onRe
   const [reviewProgress, setReviewProgress] = useState<{
     completedPages: number; totalPages: number; batchStart: number; batchEnd: number;
   } | null>(null);
+  const deepReviewPolling = useRef(false);
   const section = proposal.sections.find((item) => item.id === sectionId);
   const viewedVersion = selectedVersion === null ? null : proposal.versions[selectedVersion];
   const viewedText = viewedVersion?.text_content ?? proposal.text_content;
@@ -357,6 +358,8 @@ function ProposalDetail({ proposal, user, headers, onBack, onNew, onUpdate, onRe
   }
 
   async function runDeepReview() {
+    if (deepReviewPolling.current) return;
+    deepReviewPolling.current = true;
     setBusy("deep"); setMessage("The AI is reviewing every page, word, table, and diagram. This may take several minutes.");
     try {
       const currentJob = proposal.diagram_analysis as { responseId?: string; status?: string } | null;
@@ -369,14 +372,28 @@ function ProposalDetail({ proposal, user, headers, onBack, onNew, onUpdate, onRe
         }, 75_000);
         const started = await start.json().catch(() => ({ error: "The AI response could not be read." }));
         if (!start.ok) return setMessage(started.error ?? "Deep document review failed.");
-        setReviewProgress({
+        const progress = {
           completedPages: started.completedPages ?? 0,
           totalPages: started.totalPages ?? 0,
           batchStart: started.batchStart ?? 1,
           batchEnd: started.batchEnd ?? 1
+        };
+        setReviewProgress(progress);
+        onReplace({
+          ...proposal,
+          diagram_analysis: {
+            responseId: started.responseId,
+            status: started.status ?? "queued",
+            startedAt: new Date().toISOString(),
+            ...progress
+          },
+          status: "in_review"
         });
+        setMessage(started.alreadyRunning
+          ? "AI review is already in progress. Reconnected to the saved job automatically."
+          : "AI review started in the background. The Analyze button is locked until this review finishes.");
       } else {
-        setMessage("Reconnected to the saved background review. Checking for completed results…");
+        setMessage("AI review is already in progress. Reconnected automatically and checking for completed results…");
       }
 
       const deadline = Date.now() + 45 * 60_000;
@@ -442,9 +459,17 @@ function ProposalDetail({ proposal, user, headers, onBack, onNew, onUpdate, onRe
         ? "A status check timed out, but the background review remains saved. Open this proposal again to continue checking it."
         : error instanceof Error ? error.message : "Deep document review failed.");
     } finally {
+      deepReviewPolling.current = false;
       setBusy("");
     }
   }
+
+  useEffect(() => {
+    if (reviewJob?.responseId && (reviewJob.status === "queued" || reviewJob.status === "in_progress")) {
+      void runDeepReview();
+    }
+    // The response ID/status pair is the durable job identity. Other proposal edits must not restart polling.
+  }, [reviewJob?.responseId, reviewJob?.status]);
 
   async function runCompliance() {
     setBusy("compliance"); setMessage("");
@@ -504,12 +529,16 @@ function ProposalDetail({ proposal, user, headers, onBack, onNew, onUpdate, onRe
     /> : null}
     {message ? <p className="message">{message}</p> : null}
     <div className="detail-actions">
-      <button className="primary" onClick={runDeepReview} disabled={!!busy}><FileSearch size={17} />{busy === "deep"
-        ? "Analyzing every page…"
-        : (proposal.diagram_analysis as { status?: string } | null)?.status === "queued" ||
-            (proposal.diagram_analysis as { status?: string } | null)?.status === "in_progress"
-          ? "Continue background review"
+      <button
+        className="primary"
+        onClick={runDeepReview}
+        disabled={!!busy || reviewRunning}
+        aria-describedby={reviewRunning ? "analysis-lock-reason" : undefined}
+        title={reviewRunning ? "AI review is already in progress. Another review cannot be started until it finishes." : undefined}
+      ><FileSearch size={17} />{reviewRunning
+        ? "AI review already in progress"
           : proposal.page_reviews?.length ? "Re-analyze proposal" : "Analyze proposal"}</button>
+      {reviewRunning ? <small className="analysis-lock-note" id="analysis-lock-reason">The AI tool is already reviewing this proposal in the background. The button will unlock when it finishes.</small> : null}
       <button className="soft-button" onClick={runCompliance} disabled={!!busy}><CheckCircle2 size={17} />{busy === "compliance" ? "Comparing…" : "Run structured standards comparison"}</button>
       <span>{proposal.project_scope.join(" · ") || "Scope not detected"}</span>
     </div>

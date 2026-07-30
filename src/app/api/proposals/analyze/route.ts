@@ -631,6 +631,19 @@ export async function POST(request: Request) {
     if (mode === "deep") {
       const proposalId = String(body.proposalId ?? "");
       const { proposal, standards } = await loadProposalAndStandards(auth, proposalId);
+      const existingJob = proposal.diagram_analysis as ReviewRecord | null;
+      const existingStatus = String(existingJob?.status ?? "");
+      if (existingJob?.responseId && (existingStatus === "queued" || existingStatus === "in_progress")) {
+        return NextResponse.json({
+          status: existingStatus,
+          responseId: existingJob.responseId,
+          completedPages: Number(existingJob.completedPages ?? 0),
+          totalPages: Number(existingJob.totalPages ?? 0),
+          batchStart: Number(existingJob.batchStart ?? 1),
+          batchEnd: Number(existingJob.batchEnd ?? 1),
+          alreadyRunning: true
+        }, { status: 202 });
+      }
       const batch = await startDeepReviewBatch(auth, proposal, standards, 1);
       const { error: updateError } = await auth.client.from("proposals").update({
         diagram_analysis: {

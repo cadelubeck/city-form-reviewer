@@ -1132,6 +1132,13 @@ button:disabled {
   font-size: .74rem;
 }
 
+.analysis-lock-note {
+  max-width: 330px;
+  color: #64748b;
+  font-size: .7rem;
+  line-height: 1.35;
+}
+
 .viewer-grid {
   --review-panel-height: max(860px, calc(100vh - 96px));
   display: grid;
