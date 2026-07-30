@@ -21,6 +21,7 @@ import {
   Upload
 } from "lucide-react";
 import { ProposalWorkspace } from "./proposal-workspace";
+import { usePathname, useRouter } from "next/navigation";
 import type { User } from "@supabase/supabase-js";
 import { getSupabase } from "@/lib/supabase";
 import { apiFetch } from "@/lib/api-fetch";
@@ -103,7 +104,31 @@ type DocumentFormState = {
   text: string;
 };
 
+type AppView = "proposals" | "my-work" | "dashboard" | "reviewer" | "documents" | "profile";
+
+function viewFromPath(pathname: string): AppView {
+  if (pathname.startsWith("/my-work")) return "my-work";
+  if (pathname.startsWith("/dashboard")) return "dashboard";
+  if (pathname.startsWith("/quick-review")) return "reviewer";
+  if (pathname.startsWith("/standards")) return "documents";
+  if (pathname.startsWith("/profile")) return "profile";
+  return "proposals";
+}
+
+function routeForView(view: AppView) {
+  return {
+    proposals: "/proposals",
+    "my-work": "/my-work",
+    dashboard: "/dashboard",
+    reviewer: "/quick-review",
+    documents: "/standards",
+    profile: "/profile"
+  }[view];
+}
+
 export function AppShell() {
+  const pathname = usePathname();
+  const router = useRouter();
   const supabase = useMemo(() => getSupabase(), []);
   const [user, setUser] = useState<User | null>(null);
   const [authReady, setAuthReady] = useState(false);
@@ -119,7 +144,7 @@ export function AppShell() {
   const [message, setMessage] = useState("");
   const [isBusy, setIsBusy] = useState(false);
   const [isReviewing, setIsReviewing] = useState(false);
-  const [activeView, setActiveView] = useState<"proposals" | "my-work" | "dashboard" | "reviewer" | "documents" | "profile">("proposals");
+  const [activeView, setActiveView] = useState<"proposals" | "my-work" | "dashboard" | "reviewer" | "documents" | "profile">(() => viewFromPath(pathname));
   const [usageEvents, setUsageEvents] = useState<UsageEvent[]>([]);
   const [documents, setDocuments] = useState<EngineeringDocument[]>([]);
   const [documentFile, setDocumentFile] = useState<File | null>(null);
@@ -164,6 +189,15 @@ export function AppShell() {
       listener.subscription.unsubscribe();
     };
   }, [supabase]);
+
+  useEffect(() => {
+    setActiveView(viewFromPath(pathname));
+  }, [pathname]);
+
+  function navigate(view: typeof activeView) {
+    setActiveView(view);
+    router.push(routeForView(view));
+  }
 
   async function logUsage(
     userId: string,
@@ -350,7 +384,7 @@ export function AppShell() {
     setReviewResult(null);
     setAiNarrative(null);
     setMessage("Signed out.");
-    setActiveView("proposals");
+    navigate("proposals");
   }
 
   function updateScope(tag: string) {
@@ -631,29 +665,29 @@ export function AppShell() {
             </div>
           </div>
           <div className="topbar-actions">
-            <button className={`nav-button ${activeView === "proposals" ? "active" : ""}`} onClick={() => setActiveView("proposals")}>
+            <button className={`nav-button ${activeView === "proposals" ? "active" : ""}`} onClick={() => navigate("proposals")}>
               <ClipboardList size={18} /><span>Proposals</span>
             </button>
-            <button className={`nav-button ${activeView === "my-work" ? "active" : ""}`} onClick={() => setActiveView("my-work")}>
+            <button className={`nav-button ${activeView === "my-work" ? "active" : ""}`} onClick={() => navigate("my-work")}>
               <UserCircle size={18} /><span>My work</span>
             </button>
-            <button className={`nav-button ${activeView === "reviewer" ? "active" : ""}`} onClick={() => setActiveView("reviewer")}>
+            <button className={`nav-button ${activeView === "reviewer" ? "active" : ""}`} onClick={() => navigate("reviewer")}>
               <SearchCheck size={18} /><span>Quick review</span>
             </button>
-            <button className={`nav-button ${activeView === "documents" ? "active" : ""}`} onClick={() => setActiveView("documents")}>
+            <button className={`nav-button ${activeView === "documents" ? "active" : ""}`} onClick={() => navigate("documents")}>
               <BookOpen size={18} /><span>Standards library</span>
             </button>
-            <button className={`nav-button ${activeView === "dashboard" ? "active" : ""}`} onClick={() => setActiveView("dashboard")}>
+            <button className={`nav-button ${activeView === "dashboard" ? "active" : ""}`} onClick={() => navigate("dashboard")}>
               <BarChart3 size={18} /><span>Dashboard</span>
             </button>
             <button
               className={`nav-button ${activeView === "profile" ? "active" : ""}`}
-              onClick={() => setActiveView("profile")}
+              onClick={() => navigate("profile")}
             >
               <UserCircle size={18} />
               <span>Profile</span>
             </button>
-            <button className="user-avatar" onClick={() => setActiveView("profile")} aria-label="Open profile">
+            <button className="user-avatar" onClick={() => navigate("profile")} aria-label="Open profile">
               {(user.user_metadata.full_name || user.email || "U").charAt(0).toUpperCase()}
             </button>
             <button className="icon-button" onClick={signOut} aria-label="Sign out">

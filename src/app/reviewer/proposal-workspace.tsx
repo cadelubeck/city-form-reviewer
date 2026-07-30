@@ -9,6 +9,7 @@ import {
 import { getSupabase } from "@/lib/supabase";
 import { apiFetch } from "@/lib/api-fetch";
 import type { PageReviewFinding, Proposal, ProposalPriority, ProposalSection, ProposalStatus, ReviewResult } from "@/lib/types";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 
 type Mode = "proposals" | "my-work" | "dashboard";
 const statuses: ProposalStatus[] = ["pending", "in_review", "needs_updates", "accepted", "rejected"];
@@ -49,6 +50,9 @@ async function uploadProposalFile(
 }
 
 export function ProposalWorkspace({ user, mode }: { user: User; mode: Mode }) {
+  const pathname = usePathname();
+  const router = useRouter();
+  const requestedProposalId = pathname.match(/^\/proposals\/([^/]+)\/review\/?$/)?.[1];
   const supabase = useMemo(() => getSupabase(), []);
   const [proposals, setProposals] = useState<Proposal[]>([]);
   const [selected, setSelected] = useState<Proposal | null>(null);
@@ -70,13 +74,14 @@ export function ProposalWorkspace({ user, mode }: { user: User; mode: Mode }) {
       const data = await response.json();
       if (!response.ok) return setMessage(data.error ?? "Unable to load proposals.");
       setProposals(data as Proposal[]);
-      if (selected) setSelected((data as Proposal[]).find((item) => item.id === selected.id) ?? null);
+      const selectedId = selected?.id ?? requestedProposalId;
+      if (selectedId) setSelected((data as Proposal[]).find((item) => item.id === selectedId) ?? null);
     } catch (error) {
       setMessage(error instanceof Error && error.name === "TimeoutError"
         ? "The proposal service did not respond within 25 seconds."
         : "Unable to load proposals.");
     }
-  }, [headers, selected?.id]);
+  }, [headers, requestedProposalId, selected?.id]);
 
   useEffect(() => { void load(); }, [load]);
 
@@ -97,6 +102,7 @@ export function ProposalWorkspace({ user, mode }: { user: User; mode: Mode }) {
     const response = await apiFetch(`/api/proposals?id=${id}`, { method: "DELETE", headers: await headers() });
     if (!response.ok) return setMessage("Unable to archive proposal.");
     setSelected(null);
+    router.push("/proposals");
     setMessage("Proposal archived. The complete record remains available under Archived records.");
     await load();
   }
@@ -115,11 +121,15 @@ export function ProposalWorkspace({ user, mode }: { user: User; mode: Mode }) {
       proposal={selected}
       user={user}
       headers={headers}
-      onBack={() => setSelected(null)}
+      onBack={() => {
+        setSelected(null);
+        router.push(mode === "my-work" ? "/my-work" : mode === "dashboard" ? "/dashboard" : "/proposals");
+      }}
       onNew={() => {
         setSelected(null);
         setMessage("");
         setShowUpload(true);
+        router.push("/proposals");
       }}
       onUpdate={updateProposal}
       onReplace={(proposal) => {
@@ -130,7 +140,12 @@ export function ProposalWorkspace({ user, mode }: { user: User; mode: Mode }) {
     />;
   }
 
-  if (mode === "dashboard") return <ProposalDashboard proposals={proposals.filter((item) => !item.archived_at)} onOpen={setSelected} onRefresh={load} />;
+  const openProposal = (proposal: Proposal) => {
+    setSelected(proposal);
+    router.push(`/proposals/${encodeURIComponent(proposal.id)}/review?page=1`);
+  };
+
+  if (mode === "dashboard") return <ProposalDashboard proposals={proposals.filter((item) => !item.archived_at)} onOpen={openProposal} onRefresh={load} />;
 
   return (
     <section className="proposal-hub">
@@ -167,7 +182,7 @@ export function ProposalWorkspace({ user, mode }: { user: User; mode: Mode }) {
             <section className="proposal-group" key={location}>
               <div className="group-heading"><span>📍</span><strong>{location}</strong><span className="count-badge">{items?.length ?? 0}</span></div>
               <div className="proposal-list">{items?.map((proposal) => (
-                <button className="proposal-row" key={proposal.id} onClick={() => setSelected(proposal)}>
+                <button className="proposal-row" key={proposal.id} onClick={() => openProposal(proposal)}>
                   <span className="document-icon">📄</span>
                   <span className="proposal-copy"><strong>{proposal.name}</strong><small>{proposal.client || "No client"} · {new Date(proposal.updated_at).toLocaleDateString()}</small></span>
                   {proposal.priority ? <span className={`priority ${proposal.priority}`}>{proposal.priority}</span> : null}
@@ -239,6 +254,9 @@ function ProposalDetail({ proposal, user, headers, onBack, onNew, onUpdate, onRe
   onBack: () => void; onNew: () => void; onUpdate: (patch: Partial<Proposal> & { id: string }) => Promise<void>;
   onReplace: (proposal: Proposal) => void; onDelete: () => void;
 }) {
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const requestedPage = Number(searchParams.get("page"));
   const [sectionId, setSectionId] = useState(proposal.sections[0]?.id ?? "");
   const [busy, setBusy] = useState("");
   const [message, setMessage] = useState("");
@@ -246,7 +264,9 @@ function ProposalDetail({ proposal, user, headers, onBack, onNew, onUpdate, onRe
   const [versionModal, setVersionModal] = useState(false);
   const [selectedVersion, setSelectedVersion] = useState<number | null>(null);
   const [statute, setStatute] = useState({ title: "", url: "", relevance: "", jurisdiction: "" });
-  const [activePage, setActivePage] = useState(proposal.page_reviews?.[0]?.page ?? 1);
+  const [activePage, setActivePage] = useState(
+    Number.isInteger(requestedPage) && requestedPage > 0 ? requestedPage : proposal.page_reviews?.[0]?.page ?? 1
+  );
   const [reviewProgress, setReviewProgress] = useState<{
     completedPages: number; totalPages: number; batchStart: number; batchEnd: number;
   } | null>(null);
@@ -280,6 +300,17 @@ function ProposalDetail({ proposal, user, headers, onBack, onNew, onUpdate, onRe
     headers().then((auth) => apiFetch("/api/team", { headers: auth })).then((response) => response.json())
       .then((data) => setTeam(data.members ?? [])).catch(() => {});
   }, [headers]);
+
+  useEffect(() => {
+    if (Number.isInteger(requestedPage) && requestedPage > 0 && requestedPage !== activePage) {
+      setActivePage(requestedPage);
+    }
+  }, [activePage, requestedPage]);
+
+  function openPage(page: number) {
+    setActivePage(page);
+    router.push(`/proposals/${encodeURIComponent(proposal.id)}/review?page=${page}`, { scroll: false });
+  }
 
   async function updateSection(patch: Partial<ProposalSection>) {
     await onUpdate({ id: proposal.id, sections: proposal.sections.map((item) => item.id === sectionId ? { ...item, ...patch } : item) });
@@ -395,7 +426,7 @@ function ProposalDetail({ proposal, user, headers, onBack, onNew, onUpdate, onRe
           extracted_requirements: data.extractedRequirements ?? [],
           status: "in_review"
         });
-        setActivePage(pages[0]?.page ?? 1);
+        openPage(pages[0]?.page ?? 1);
         setReviewProgress({
           completedPages: data.completedPages ?? pages.length,
           totalPages: data.totalPages ?? pages.length,
@@ -482,10 +513,10 @@ function ProposalDetail({ proposal, user, headers, onBack, onNew, onUpdate, onRe
       <button className="soft-button" onClick={runCompliance} disabled={!!busy}><CheckCircle2 size={17} />{busy === "compliance" ? "Comparing…" : "Run structured standards comparison"}</button>
       <span>{proposal.project_scope.join(" · ") || "Scope not detected"}</span>
     </div>
-    {proposal.page_reviews?.length ? <ReviewTriage findings={allFindings} missingInformation={globalMissingInformation} onOpenPage={setActivePage} /> : null}
+    {proposal.page_reviews?.length ? <ReviewTriage findings={allFindings} missingInformation={globalMissingInformation} onOpenPage={openPage} /> : null}
     {proposal.page_reviews?.length ? <nav className="page-review-nav" aria-label="Reviewed pages">
-      {proposal.page_reviews.map((page) => <button className={page.page === activePage ? "active" : ""} key={page.page} onClick={() => setActivePage(page.page)}>
-        <span>Page {page.page}</span><small>{page.findings.filter((item) => item.severity !== "pass").length} flags</small>
+      {proposal.page_reviews.map((page) => <button className={page.page === activePage ? "active" : ""} key={page.page} onClick={() => openPage(page.page)} title={`Page ${page.page} · ${page.findings.filter((item) => item.severity !== "pass").length} flags`}>
+        <span>P{page.page}</span><small>{page.findings.filter((item) => item.severity !== "pass").length}</small>
       </button>)}
     </nav> : null}
     <div className="viewer-grid">
