@@ -10,9 +10,16 @@ import type {
 } from "./types";
 
 function appliesToProposal(requirement: Requirement, proposal: ProposalSubmission) {
-  const sameClient = requirement.clientId === proposal.clientId;
-  const sameJurisdiction = requirement.jurisdiction === proposal.jurisdiction;
-  const sameScope = requirement.scopeTags.some((tag) => proposal.scopeTags.includes(tag));
+  const normalize = (value: string) => value.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+  const requirementClient = normalize(requirement.clientId);
+  const proposalClient = normalize(proposal.clientId);
+  const requirementJurisdiction = normalize(requirement.jurisdiction);
+  const proposalJurisdiction = normalize(proposal.jurisdiction);
+  const proposalScope = new Set(proposal.scopeTags.map(normalize));
+  const sameClient = requirement.sourceType === "city-standard" || !requirementClient || requirementClient === proposalClient;
+  const sameJurisdiction = !requirementJurisdiction || requirementJurisdiction === proposalJurisdiction;
+  const sameScope = !requirement.scopeTags.length || !proposalScope.size ||
+    requirement.scopeTags.some((tag) => proposalScope.has(normalize(tag)));
   return sameClient && sameJurisdiction && sameScope;
 }
 

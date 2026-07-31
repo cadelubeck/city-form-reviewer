@@ -496,6 +496,8 @@ function ProposalDetail({ proposal, user, headers, onBack, onNew, onUpdate, onRe
       const data = await response.json().catch(() => ({ message: "The review response could not be read." }));
       if (!response.ok || !data.review) return setMessage(data.message ?? "Compliance review failed.");
       await onUpdate({ id: proposal.id, compliance_review: data.review });
+      const summary = data.review.summary;
+      setMessage(`Structured comparison complete: ${summary.pass} passed, ${summary.fail} failed, and ${summary.missing + summary.needsReview} missing or need review.`);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Compliance review failed.");
     } finally {
@@ -542,6 +544,7 @@ function ProposalDetail({ proposal, user, headers, onBack, onNew, onUpdate, onRe
       <button className="soft-button" onClick={runCompliance} disabled={!!busy}><CheckCircle2 size={17} />{busy === "compliance" ? "Comparing…" : "Run structured standards comparison"}</button>
       <span>{proposal.project_scope.join(" · ") || "Scope not detected"}</span>
     </div>
+    {proposal.compliance_review ? <ComplianceResults result={proposal.compliance_review} /> : null}
     {proposal.page_reviews?.length ? <ReviewTriage findings={allFindings} missingInformation={globalMissingInformation} onOpenPage={openPage} /> : null}
     {proposal.page_reviews?.length ? <nav className="page-review-nav" aria-label="Reviewed pages">
       {proposal.page_reviews.map((page) => <button className={page.page === activePage ? "active" : ""} key={page.page} onClick={() => openPage(page.page)} title={`Page ${page.page} · ${page.findings.filter((item) => item.severity !== "pass").length} flags`}>
@@ -571,7 +574,6 @@ function ProposalDetail({ proposal, user, headers, onBack, onNew, onUpdate, onRe
       </aside>
     </div>
     {proposal.diagram_analysis && proposal.page_reviews.length ? <AnalysisPanel analysis={proposal.diagram_analysis} /> : null}
-    {proposal.compliance_review ? <ComplianceResults result={proposal.compliance_review} /> : null}
     {versionModal ? <VersionModal proposal={proposal} headers={headers} busy={busy} onBusy={setBusy} onClose={() => setVersionModal(false)} onSelect={(index) => { setSelectedVersion(index); setVersionModal(false); }} onUpdated={(updated) => { onReplace(updated); setSelectedVersion(null); setVersionModal(false); }} /> : null}
   </section>;
 }

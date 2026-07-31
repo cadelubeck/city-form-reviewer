@@ -1,10 +1,8 @@
 import { NextResponse } from "next/server";
-import { createAiReviewNarrative } from "@/lib/ai-review";
 import { reviewProposal } from "@/lib/review-engine";
 import { sourceRegistry, standardLibrary } from "@/lib/standards";
 import type { ProposalSubmission, SiteFinding } from "@/lib/types";
 import {
-  asProposalMeasurements,
   asSiteFindings,
   extractEngineeringRequirements
 } from "@/lib/extract-engineering";
@@ -65,25 +63,6 @@ export async function POST(request: Request) {
     | { proposalResponseId?: string; siteResponseId?: string; detectedJurisdiction?: unknown; projectScope?: string[] }
     | undefined;
 
-  if (process.env.OPENAI_API_KEY && proposal.proposalText?.trim()) {
-    const proposalExtraction = await extractEngineeringRequirements({
-      text: proposal.proposalText,
-      context: `PROJECT: ${proposal.projectName}\nSUBMITTED JURISDICTION: ${proposal.jurisdiction}`,
-      mode: "proposal"
-    });
-    const extracted = asProposalMeasurements(proposalExtraction.data);
-    proposal.measurements = proposal.measurements.map((measurement) =>
-      measurement.value === null || measurement.value === ""
-        ? extracted.find((candidate) => candidate.metric === measurement.metric) ?? measurement
-        : measurement
-    );
-    extraction = {
-      proposalResponseId: proposalExtraction.responseId,
-      detectedJurisdiction: proposalExtraction.data.jurisdiction,
-      projectScope: proposalExtraction.data.projectScope
-    };
-  }
-
   if (process.env.OPENAI_API_KEY && body.siteDocumentText?.trim()) {
     const siteExtraction = await extractEngineeringRequirements({
       text: body.siteDocumentText,
@@ -102,9 +81,10 @@ export async function POST(request: Request) {
       .from("engineering_documents")
       .select("*")
       .is("archived_at", null);
+    const normalize = (value: string) => value.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
     const documents = ((data ?? []) as EngineeringDocument[]).filter((document) =>
-      (!document.jurisdiction || document.jurisdiction.toLowerCase() === proposal.jurisdiction.toLowerCase()) &&
-      (!document.client_id || document.client_id === proposal.clientId)
+      (!document.jurisdiction || normalize(document.jurisdiction) === normalize(proposal.jurisdiction)) &&
+      (document.document_type === "city-standard" || !document.client_id || normalize(document.client_id) === normalize(proposal.clientId))
     );
     dynamicStandards = documents
       .filter((document) => ["city-standard", "client-standard", "manual"].includes(document.document_type))
@@ -122,13 +102,10 @@ export async function POST(request: Request) {
     siteFindings,
     sourceRegistry
   );
-  const aiNarrative = await createAiReviewNarrative(proposal, review);
-
   return NextResponse.json({
     ok: true,
     proposal,
     review,
-    aiNarrative,
     extraction
   });
 }
