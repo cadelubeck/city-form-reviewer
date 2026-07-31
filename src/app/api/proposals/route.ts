@@ -68,13 +68,15 @@ export async function GET(request: Request) {
   const auth = await authenticatedSupabase(request);
   if (!auth) return NextResponse.json({ error: "Authentication required." }, { status: 401 });
   const id = new URL(request.url).searchParams.get("id");
+  const listColumns = [
+    "id", "user_id", "company_id", "name", "client", "location", "status", "priority",
+    "assigned_to_id", "assigned_to_name", "due_date", "archived_at", "created_at", "updated_at"
+  ].join(",");
   const { data, error } = id
     ? await auth.client.from("proposals").select("*").eq("id", id).single()
-    : await auth.client.from("proposals").select("*").order("updated_at", { ascending: false });
+    : await auth.client.from("proposals").select(listColumns).order("updated_at", { ascending: false });
   if (error) return NextResponse.json({ error: error.message }, { status: error.code === "PGRST116" ? 404 : 500 });
-  if (Array.isArray(data)) {
-    return NextResponse.json(await Promise.all(data.map((proposal) => withFileUrl(auth.client, proposal))));
-  }
+  if (Array.isArray(data)) return NextResponse.json(data);
   return NextResponse.json(await withFileUrl(auth.client, data));
 }
 

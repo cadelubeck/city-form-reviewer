@@ -62,6 +62,7 @@ export function ProposalWorkspace({ user, mode }: { user: User; mode: Mode }) {
   const [showArchived, setShowArchived] = useState(false);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
+  const loadedProposalId = useRef<string | null>(null);
 
   const headers = useCallback(async (): Promise<Record<string, string>> => {
     const token = (await supabase?.auth.getSession())?.data.session?.access_token;
@@ -70,18 +71,28 @@ export function ProposalWorkspace({ user, mode }: { user: User; mode: Mode }) {
 
   const load = useCallback(async () => {
     try {
-      const response = await apiFetch("/api/proposals", { headers: await headers() });
-      const data = await response.json();
-      if (!response.ok) return setMessage(data.error ?? "Unable to load proposals.");
+      const auth = await headers();
+      const [listResponse, detailResponse] = await Promise.all([
+        apiFetch("/api/proposals", { headers: auth }),
+        requestedProposalId && loadedProposalId.current !== requestedProposalId
+          ? apiFetch(`/api/proposals?id=${encodeURIComponent(requestedProposalId)}`, { headers: auth })
+          : Promise.resolve(null)
+      ]);
+      const data = await listResponse.json();
+      if (!listResponse.ok) return setMessage(data.error ?? "Unable to load proposals.");
       setProposals(data as Proposal[]);
-      const selectedId = selected?.id ?? requestedProposalId;
-      if (selectedId) setSelected((data as Proposal[]).find((item) => item.id === selectedId) ?? null);
+      if (detailResponse) {
+        const detail = await detailResponse.json();
+        if (!detailResponse.ok) return setMessage(detail.error ?? "Unable to load proposal.");
+        loadedProposalId.current = detail.id;
+        setSelected(detail as Proposal);
+      }
     } catch (error) {
       setMessage(error instanceof Error && error.name === "TimeoutError"
         ? "The proposal service did not respond within 25 seconds."
         : "Unable to load proposals.");
     }
-  }, [headers, requestedProposalId, selected?.id]);
+  }, [headers, requestedProposalId]);
 
   useEffect(() => { void load(); }, [load]);
 
@@ -122,10 +133,12 @@ export function ProposalWorkspace({ user, mode }: { user: User; mode: Mode }) {
       user={user}
       headers={headers}
       onBack={() => {
+        loadedProposalId.current = null;
         setSelected(null);
         router.push(mode === "my-work" ? "/my-work" : mode === "dashboard" ? "/dashboard" : "/proposals");
       }}
       onNew={() => {
+        loadedProposalId.current = null;
         setSelected(null);
         setMessage("");
         setShowUpload(true);
@@ -140,12 +153,26 @@ export function ProposalWorkspace({ user, mode }: { user: User; mode: Mode }) {
     />;
   }
 
-  const openProposal = (proposal: Proposal) => {
-    setSelected(proposal);
+  const openProposal = async (proposal: Proposal) => {
+    loadedProposalId.current = proposal.id;
     router.push(`/proposals/${encodeURIComponent(proposal.id)}/review?page=1`);
+    setMessage("Loading proposal…");
+    try {
+      const response = await apiFetch(`/api/proposals?id=${encodeURIComponent(proposal.id)}`, { headers: await headers() });
+      const detail = await response.json();
+      if (!response.ok) {
+        loadedProposalId.current = null;
+        return setMessage(detail.error ?? "Unable to load proposal.");
+      }
+      setSelected(detail as Proposal);
+      setMessage("");
+    } catch {
+      loadedProposalId.current = null;
+      setMessage("Unable to load proposal details.");
+    }
   };
 
-  if (mode === "dashboard") return <ProposalDashboard proposals={proposals.filter((item) => !item.archived_at)} onOpen={openProposal} onRefresh={load} />;
+  if (mode === "dashboard") return <ProposalDashboard proposals={proposals.filter((item) => !item.archived_at)} onOpen={(proposal) => void openProposal(proposal)} onRefresh={load} />;
 
   return (
     <section className="proposal-hub">
@@ -182,7 +209,7 @@ export function ProposalWorkspace({ user, mode }: { user: User; mode: Mode }) {
             <section className="proposal-group" key={location}>
               <div className="group-heading"><span>📍</span><strong>{location}</strong><span className="count-badge">{items?.length ?? 0}</span></div>
               <div className="proposal-list">{items?.map((proposal) => (
-                <button className="proposal-row" key={proposal.id} onClick={() => openProposal(proposal)}>
+                <button className="proposal-row" key={proposal.id} onClick={() => void openProposal(proposal)}>
                   <span className="document-icon">📄</span>
                   <span className="proposal-copy"><strong>{proposal.name}</strong><small>{proposal.client || "No client"} · {new Date(proposal.updated_at).toLocaleDateString()}</small></span>
                   {proposal.priority ? <span className={`priority ${proposal.priority}`}>{proposal.priority}</span> : null}

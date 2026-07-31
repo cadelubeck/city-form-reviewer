@@ -228,6 +228,7 @@ export function AppShell() {
       setReviews([]);
       return;
     }
+    if (activeView !== "reviewer") return;
 
     supabase
       .from("reviews")
@@ -240,7 +241,7 @@ export function AppShell() {
         }
         setReviews((data ?? []) as Review[]);
       });
-  }, [supabase, user]);
+  }, [activeView, supabase, user]);
 
   useEffect(() => {
     if (!supabase || !user || activeView !== "profile") return;
