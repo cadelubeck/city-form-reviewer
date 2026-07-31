@@ -176,7 +176,7 @@ export async function PATCH(request: Request) {
       snapshot: data
     });
   }
-  return NextResponse.json(data);
+  return NextResponse.json(await withFileUrl(auth.client, data));
 }
 
 export async function DELETE(request: Request) {
